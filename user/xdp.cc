@@ -138,33 +138,27 @@ static void recv() {
             addr = xsk_umem__extract_addr(desc->addr);
             xsk_ring_cons__release(&xsk.rx, 1);
 
-            // // --- Parse Ethernet ---
-            // struct ethhdr* eth = (struct ethhdr*)data;
+            struct ethhdr* eth = (struct ethhdr*)data;
+            if (ntohs(eth->h_proto) == ETH_P_IP) {
+                struct iphdr* iph = (struct iphdr*)(eth + 1);
+                char src_ip[INET_ADDRSTRLEN];
+                char dst_ip[INET_ADDRSTRLEN];
 
-            // if (ntohs(eth->h_proto) == ETH_P_IP) {
-            //     // --- Parse IPv4 ---
-            //     struct iphdr* iph = (struct iphdr*)(eth + 1);
-            //     char src_ip[INET_ADDRSTRLEN];
-            //     char dst_ip[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &iph->saddr, src_ip, sizeof(src_ip));
+                inet_ntop(AF_INET, &iph->daddr, dst_ip, sizeof(dst_ip));
 
-            //     inet_ntop(AF_INET, &iph->saddr, src_ip, sizeof(src_ip));
-            //     inet_ntop(AF_INET, &iph->daddr, dst_ip, sizeof(dst_ip));
+                if (iph->protocol == IPPROTO_UDP) {
+                    // --- Parse UDP ---
+                    struct udphdr* udp = (struct udphdr*)(iph + 1);
+                    std::cout << "UDP packet: " << src_ip << " -> " << dst_ip << ":" << ntohs(udp->source)
+                            << " -> " << ntohs(udp->dest) << " | length " << desc->len << std::endl;
+                } else {
+                    std::cout << "Non UDP packet" << std::endl;
+                }
 
-            //     std::cout << "IPv4 packet: " << src_ip << " -> " << dst_ip;
+            }
 
-            //     if (iph->protocol == IPPROTO_UDP) {
-            //         // --- Parse UDP ---
-            //         struct udphdr* udp = (struct udphdr*)(iph + 1);
-            //         std::cout << " | UDP " << ntohs(udp->source)
-            //                 << " -> " << ntohs(udp->dest);
-            //     }
-
-            //     std::cout << " | length " << desc->len << std::endl;
-            // } else {
-            //     std::cout << "Non-IPv4 frame | length " << desc->len << std::endl;
-            // }
-
-            std::cout << n << ' ' << idx << ' ' << data << ' ' << desc->len << ' ' << xsk_ring_prod__needs_wakeup(&xsk.fill) << std::endl;
+            // std::cout << n << ' ' << idx << ' ' << data << ' ' << desc->len << ' ' << xsk_ring_prod__needs_wakeup(&xsk.fill) << std::endl;
 
             // process packet here
 
