@@ -12,8 +12,8 @@ SRC = xdp.cc
 OBJ = xdp.o
 
 # Library path and linked libraries
-LDFLAGS = -L/home/ubuntu1/xdp-tools/lib/libxdp/
-LDLIBS = -lxdp
+LDFLAGS = -L/home/ubuntu1/xdp-tools/lib/libxdp/ -L/home/ubuntu1/xdp-tools/lib/libbpf/
+LDLIBS = -lxdp -lbpf
 
 # Default target
 all: $(TARGET)

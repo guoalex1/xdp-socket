@@ -10,6 +10,7 @@
 #include <sys/mman.h>        // mmap
 #include <unistd.h>          // getopt, exit
 #include <xdp/xsk.h>
+#include <bpf/bpf.h>
 #include <linux/if_link.h>
 
 #include <cassert>
@@ -70,9 +71,17 @@ static void setup_xdp() {
     const struct xsk_umem_config ucfg = { .fill_size = QueueLength, .comp_size = QueueLength, .frame_size = XSK_UMEM__DEFAULT_FRAME_SIZE };
     SYSCALL(xsk_umem__create(&xsk.umem, xsk.buffer, BufferSize, &xsk.fill, &xsk.comp, &ucfg));
 
-    const struct xsk_socket_config scfg = { .rx_size = QueueLength, .tx_size = QueueLength, .xdp_flags = XDP_FLAGS_SKB_MODE, .bind_flags = XDP_COPY | XDP_USE_NEED_WAKEUP };
+    const struct xsk_socket_config scfg = { .rx_size = QueueLength,
+                                            .tx_size = QueueLength,
+                                            .libbpf_flags = XSK_LIBXDP_FLAGS__INHIBIT_PROG_LOAD, // don't load default xdp program
+                                            .xdp_flags = XDP_FLAGS_SKB_MODE, // XDP_FLAGS_DRV_MODE
+                                            .bind_flags = XDP_COPY | XDP_USE_NEED_WAKEUP }; // XDP_ZEROCOPY
     SYSCALL(xsk_socket__create(&xsk.socket, iname, queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
     xsk.fd = xsk_socket__fd(xsk.socket);
+
+    int map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsks_map");
+    int sock_fd = xsk_socket__fd(xsk.socket);
+    bpf_map_update_elem(map_fd, &queue, &sock_fd, 0);
 
     __u32 idx;
     __u32 cnt = xsk_ring_prod__reserve(&xsk.fill, QueueLength, &idx);
