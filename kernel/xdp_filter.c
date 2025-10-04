@@ -17,6 +17,21 @@ struct {
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xsks_map SEC(".maps");
 
+struct config {
+    __u32 ip;
+    __u16 port;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct config);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
+} config_map SEC(".maps");
+
+static const __u32 config_key = 0;
+
 SEC("xdp")
 int xdp_xsk_filter(struct xdp_md* ctx)
 {
@@ -47,7 +62,17 @@ int xdp_xsk_filter(struct xdp_md* ctx)
         return XDP_PASS;
     }
 
-    if (udph->dest != __bpf_htons(8888)) {
+    __u32 key = 0;
+    struct config* cfg = bpf_map_lookup_elem(&config_map, &config_key);
+    if (!cfg) {
+        return XDP_PASS;
+    }
+
+    bpf_printk("iph->daddr: %d, cfg->ip: %d\n", iph->daddr, cfg->ip);
+
+    bpf_printk("udph->dest: %d, cfg->port: %d\n", udph->dest, cfg->port);
+
+    if (iph->daddr != cfg->ip || udph->dest != cfg->port) {
         return XDP_PASS;
     }
 

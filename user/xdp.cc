@@ -49,8 +49,17 @@ static struct xsk_queue xsk = {0};
 static int epoll_fd = -1;
 static struct epoll_event epoll_ev = {0};
 
+struct addressConfig {
+    uint32_t ip;
+    uint16_t port;
+};
+
+static char* ip = nullptr;
+static uint16_t port = 0;
+static const uint32_t configKey = 0;
+
 static void usage(const char* prog) {
-    std::cerr << "usage: " << prog << " -i <interface> -q <queue> [-d <destination-mac>]" << std::endl;
+    std::cerr << "usage: " << prog << " -i <interface> -q <queue> -a <ip> -p <port> [-d <destination-mac>]" << std::endl;
 }
 
 static void cleanup() {
@@ -79,9 +88,33 @@ static void setup_xdp() {
     SYSCALL(xsk_socket__create(&xsk.socket, iname, queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
     xsk.fd = xsk_socket__fd(xsk.socket);
 
+    // xsks_map
     int map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsks_map");
     int sock_fd = xsk_socket__fd(xsk.socket);
-    bpf_map_update_elem(map_fd, &queue, &sock_fd, 0);
+    bpf_map_update_elem(map_fd, &queue, &sock_fd, BPF_ANY);
+
+    // config_map
+    int config_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/config_map");
+    if (config_fd < 0) {
+        std::cerr << "bpf_obj_get config_map" << std::endl;
+        exit(1);
+    }
+
+    struct addressConfig config;
+
+    if (inet_pton(AF_INET, ip, &config.ip) != 1) {
+        std::cerr << "invalid IP address: " << ip << std::endl;
+        exit(1);
+    }
+    config.port = htons(port);
+
+    std::cout << config.port << std::endl;
+    std::cout << config.ip << std::endl;
+
+    if (bpf_map_update_elem(config_fd, &configKey, &config, BPF_ANY) < 0) {
+        std::cerr << "bpf_map_update_elem config_map" << std::endl;
+        exit(1);
+    }
 
     __u32 idx;
     __u32 cnt = xsk_ring_prod__reserve(&xsk.fill, QueueLength, &idx);
@@ -157,7 +190,6 @@ static void recv() {
                 inet_ntop(AF_INET, &iph->daddr, dst_ip, sizeof(dst_ip));
 
                 if (iph->protocol == IPPROTO_UDP) {
-                    // --- Parse UDP ---
                     struct udphdr* udp = (struct udphdr*)(iph + 1);
                     std::cout << "UDP packet: " << src_ip << " -> " << dst_ip << ":" << ntohs(udp->source)
                             << " -> " << ntohs(udp->dest) << " | length " << desc->len << std::endl;
@@ -183,7 +215,7 @@ static void recycle(void* pkt);
 
 int main(int argc, char** argv) {
     for (;;) {
-        int option = getopt( argc, argv, "d:i:q:h?" );
+        int option = getopt( argc, argv, "d:i:q:p:a:h?" );
         if ( option < 0 ) break;
         switch(option) {
         case 'd':
@@ -194,6 +226,12 @@ int main(int argc, char** argv) {
             break;
         case 'q':
             queue = atoi(optarg);
+            break;
+        case 'p':
+            port = atoi(optarg);
+            break;
+        case 'a':
+            ip = optarg;
             break;
         case 'h':
         case '?':
