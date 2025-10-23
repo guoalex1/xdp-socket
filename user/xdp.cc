@@ -62,6 +62,38 @@ static void usage(const char* prog) {
     std::cerr << "usage: " << prog << " -i <interface> -q <queue> -a <ip> -p <port> [-d <destination-mac>]" << std::endl;
 }
 
+static uint32_t checksum_nofold(void* data, size_t len, uint32_t sum)
+{
+	uint16_t* words = (uint16_t*)data;
+
+	for (int i = 0; i < len / 2; i++)
+		sum += words[i];
+
+	if (len & 1)
+		sum += ((unsigned char*)data)[len - 1];
+
+	return sum;
+}
+
+static uint16_t checksum_fold(void* data, size_t len, uint32_t sum)
+{
+	sum = checksum_nofold(data, len, sum);
+
+	while (sum > 0xFFFF)
+        sum = (sum & 0xFFFF) + (sum >> 16);
+
+	return ~sum;
+}
+
+static inline void swap_mac(struct ethhdr* eth)
+{
+    unsigned char tmp[ETH_ALEN];
+    memcpy(tmp, eth->h_source, ETH_ALEN);
+    memcpy(eth->h_source, eth->h_dest, ETH_ALEN);
+    memcpy(eth->h_dest, tmp, ETH_ALEN);
+}
+
+
 static void cleanup() {
     if (xsk.socket) xsk_socket__delete(xsk.socket);
 }
@@ -84,7 +116,7 @@ static void setup_xdp() {
                                             .tx_size = QueueLength,
                                             .libbpf_flags = XSK_LIBXDP_FLAGS__INHIBIT_PROG_LOAD, // don't load default xdp program
                                             .xdp_flags = XDP_FLAGS_SKB_MODE, // XDP_FLAGS_DRV_MODE
-                                            .bind_flags = XDP_COPY | XDP_USE_NEED_WAKEUP }; // XDP_ZEROCOPY
+                                            .bind_flags = XDP_COPY }; // XDP_ZEROCOPY | XDP_USE_NEED_WAKEUP
     SYSCALL(xsk_socket__create(&xsk.socket, iname, queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
     xsk.fd = xsk_socket__fd(xsk.socket);
 
@@ -107,9 +139,6 @@ static void setup_xdp() {
         exit(1);
     }
     config.port = htons(port);
-
-    std::cout << config.port << std::endl;
-    std::cout << config.ip << std::endl;
 
     if (bpf_map_update_elem(config_fd, &configKey, &config, BPF_ANY) < 0) {
         std::cerr << "bpf_map_update_elem config_map" << std::endl;
@@ -142,7 +171,7 @@ static void send() {
 static void request(char* packet = nullptr) {
     struct ethhdr* eth = (struct ethhdr*)packet;
     struct  iphdr* iph = (struct  iphdr*)(eth + 1);
-    struct udphdr *udp = (struct udphdr*)(iph + 1);
+    struct udphdr* udp = (struct udphdr*)(iph + 1);
     char* payload      =          (char*)(udp + 1);
 
     udp->source = 4711;
@@ -157,15 +186,25 @@ static void request(char* packet = nullptr) {
     iph->ttl = 64;
     iph->daddr = daddr;
     iph->saddr = saddr;
-    iph->check = 0; // TODO: checksum_fold(iph, sizeof(*iph), 0);
+    iph->check = checksum_fold(iph, sizeof(*iph), 0);
 
     eth->h_proto = htons(ETH_P_IP);
 }
 
-static void reply() {
+static void reply(const struct xdp_desc* desc, uint64_t addr) {
+    uint32_t idx;
+    if (xsk_ring_prod__reserve(&xsk.tx, 1, &idx) == 1) {
+        std::cout << "Reply" << std::endl;
+        struct xdp_desc* tx_desc = xsk_ring_prod__tx_desc(&xsk.tx, idx);
+        tx_desc->addr = addr;
+        tx_desc->len = desc->len;
+        xsk_ring_prod__submit(&xsk.tx, 1);
+        SYSCALLIO(sendto(xsk.fd, nullptr, 0, MSG_DONTWAIT, nullptr, 0));
+    }
 }
 
 static void recv() {
+    static size_t count = 0;
     for (;;) {
 //        SYSCALLIO(epoll_pwait2(epoll_fd, &epoll_ev, 1, NULL, NULL));
 //        struct pollfd fds = { xsk.fd, POLLIN };
@@ -174,7 +213,7 @@ static void recv() {
         __u32 idx;
         __u32 n = xsk_ring_cons__peek(&xsk.rx, 1, &idx);
         for (; n > 0; n -= 1, idx += 1) {
-            const struct xdp_desc *desc = xsk_ring_cons__rx_desc(&xsk.rx, idx);
+            const struct xdp_desc* desc = xsk_ring_cons__rx_desc(&xsk.rx, idx);
             __u64 addr = xsk_umem__add_offset_to_addr(desc->addr);
             void* data = xsk_umem__get_data(xsk.buffer, addr);
             addr = xsk_umem__extract_addr(desc->addr);
@@ -185,23 +224,29 @@ static void recv() {
                 struct iphdr* iph = (struct iphdr*)(eth + 1);
                 char src_ip[INET_ADDRSTRLEN];
                 char dst_ip[INET_ADDRSTRLEN];
-
                 inet_ntop(AF_INET, &iph->saddr, src_ip, sizeof(src_ip));
                 inet_ntop(AF_INET, &iph->daddr, dst_ip, sizeof(dst_ip));
 
                 if (iph->protocol == IPPROTO_UDP) {
                     struct udphdr* udp = (struct udphdr*)(iph + 1);
-                    std::cout << "UDP packet: " << src_ip << " -> " << dst_ip << ":" << ntohs(udp->source)
+                    ++count;
+                    std::cout << "UDP packet " << count << ": " << src_ip << " -> " << dst_ip << ":" << ntohs(udp->source)
                             << " -> " << ntohs(udp->dest) << " | length " << desc->len << std::endl;
+                    char* payload = (char*)(udp + 1);
+                    size_t payload_len = desc->len - ((uint8_t*)payload - (uint8_t*)data);
+
+                    std::string udp_data(payload, payload_len);
+                    std::cout << "Payload string: \"" << udp_data << "\"" << std::endl;
                 } else {
                     std::cout << "Non UDP packet" << std::endl;
                 }
 
+                swap_mac(eth);
+                std::swap(iph->saddr, iph->daddr);
+                iph->check = checksum_fold(iph, sizeof(*iph), 0);
+
+                reply(desc, addr);
             }
-
-            // std::cout << n << ' ' << idx << ' ' << data << ' ' << desc->len << ' ' << xsk_ring_prod__needs_wakeup(&xsk.fill) << std::endl;
-
-            // process packet here
 
             if (xsk_ring_prod__reserve(&xsk.fill, 1, &idx) == 1) {
                 *xsk_ring_prod__fill_addr(&xsk.fill, idx) = addr;
@@ -287,7 +332,6 @@ int main(int argc, char** argv) {
         recv();
     } else {
         recv();
-        reply();
     }
     return 0;
 }
