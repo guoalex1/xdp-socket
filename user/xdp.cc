@@ -22,13 +22,14 @@
 #include "syscall_macro.h"
 
 static char* iname = nullptr;
-static char* dmac = nullptr;
 static unsigned int queue = 0;
 
 static in_addr_t saddr = 0;
 static in_addr_t daddr = 0;
-static uint16_t  sport = 0;
-static uint16_t  dport = 0;
+
+static unsigned char smac[ETH_ALEN] = {0};
+static unsigned char dmac[ETH_ALEN] = {0};
+static bool sender = false;
 
 static const unsigned int QueueLength = 16;
 static const unsigned int BufferSize = XSK_UMEM__DEFAULT_FRAME_SIZE * QueueLength * 2;
@@ -54,12 +55,11 @@ struct addressConfig {
     uint16_t port;
 };
 
-static char* ip = nullptr;
 static uint16_t port = 0;
 static const uint32_t configKey = 0;
 
 static void usage(const char* prog) {
-    std::cerr << "usage: " << prog << " -i <interface> -q <queue> -a <ip> -p <port> [-d <destination-mac>]" << std::endl;
+    std::cerr << "usage: " << prog << " -i <interface> -q <queue> -p <port> [-d <destination-mac>] [-a <destination-ip>]" << std::endl;
 }
 
 static uint32_t checksum_nofold(void* data, size_t len, uint32_t sum)
@@ -128,17 +128,11 @@ static void setup_xdp() {
     // config_map
     int config_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/config_map");
     if (config_fd < 0) {
-        std::cerr << "bpf_obj_get config_map" << std::endl;
+        std::cerr << "Error getting config_map" << std::endl;
         exit(1);
     }
 
-    struct addressConfig config;
-
-    if (inet_pton(AF_INET, ip, &config.ip) != 1) {
-        std::cerr << "invalid IP address: " << ip << std::endl;
-        exit(1);
-    }
-    config.port = htons(port);
+    struct addressConfig config{saddr, htons(port)};
 
     if (bpf_map_update_elem(config_fd, &configKey, &config, BPF_ANY) < 0) {
         std::cerr << "bpf_map_update_elem config_map" << std::endl;
@@ -168,28 +162,52 @@ static void setup_xdp() {
 static void send() {
 }
 
-static void request(char* packet = nullptr) {
-    struct ethhdr* eth = (struct ethhdr*)packet;
-    struct  iphdr* iph = (struct  iphdr*)(eth + 1);
-    struct udphdr* udp = (struct udphdr*)(iph + 1);
-    char* payload      =          (char*)(udp + 1);
+static void request() {
+    const uint64_t frame_offset = 0;
+    void* data = xsk_umem__get_data(xsk.buffer, frame_offset);
 
-    udp->source = 4711;
-    udp->dest   = 4711;
-    udp->len    = htons(sizeof(*udp));
+    struct ethhdr* eth = (struct ethhdr*)data;
+    struct iphdr*  iph = (struct iphdr*)(eth + 1);
+    struct udphdr* udp = (struct udphdr*)(iph + 1);
+    char* payload       = (char*)(udp + 1);
+
+    char src_ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &saddr, src_ip, sizeof(src_ip));
+    std::string message = std::string("test ") + src_ip;
+    size_t payload_len = message.size();
+    memcpy(payload, message.data(), payload_len);
+
+    memcpy(eth->h_source, smac, ETH_ALEN);
+    memcpy(eth->h_dest, dmac, ETH_ALEN);
+    eth->h_proto = htons(ETH_P_IP);
+
+    udp->source = htons(port);
+    udp->dest   = htons(port);
+    udp->len    = htons(sizeof(struct udphdr) + payload_len);
     udp->check  = 0;
 
     iph->version = 4;
     iph->ihl = 5;
     iph->protocol = IPPROTO_UDP;
-    iph->tot_len = htons(sizeof(*iph) + udp->len);
+    iph->tot_len = htons(sizeof(struct iphdr) + sizeof(struct udphdr) + payload_len);
     iph->ttl = 64;
     iph->daddr = daddr;
     iph->saddr = saddr;
     iph->check = checksum_fold(iph, sizeof(*iph), 0);
 
-    eth->h_proto = htons(ETH_P_IP);
+    const uint32_t frame_len = sizeof(*eth) + sizeof(*iph) + sizeof(*udp) + payload_len;
+
+    uint32_t idx;
+    if (xsk_ring_prod__reserve(&xsk.tx, 1, &idx) == 1) {
+        struct xdp_desc* tx_desc = xsk_ring_prod__tx_desc(&xsk.tx, idx);
+        tx_desc->addr = frame_offset;
+        tx_desc->len  = frame_len;
+        xsk_ring_prod__submit(&xsk.tx, 1);
+        SYSCALLIO(sendto(xsk.fd, nullptr, 0, MSG_DONTWAIT, nullptr, 0));
+        std::cout << "Sent UDP request (" << frame_len << " bytes)" << std::endl;
+    }
 }
+
 
 static void reply(const struct xdp_desc* desc, uint64_t addr) {
     uint32_t idx;
@@ -264,7 +282,17 @@ int main(int argc, char** argv) {
         if ( option < 0 ) break;
         switch(option) {
         case 'd':
-            dmac = optarg;
+            int vals[ETH_ALEN];
+            if (sscanf(optarg, "%x:%x:%x:%x:%x:%x", &vals[0], &vals[1], &vals[2], &vals[3], &vals[4], &vals[5]) != ETH_ALEN) {
+                std::cerr << "Invalid MAC address\n";
+                exit(1);
+            }
+
+            for (int i = 0; i < ETH_ALEN; i++) {
+                dmac[i] = (unsigned char)vals[i];
+            }
+
+            sender = true;
             break;
         case 'i':
             iname = optarg;
@@ -276,7 +304,10 @@ int main(int argc, char** argv) {
             port = atoi(optarg);
             break;
         case 'a':
-            ip = optarg;
+            if (inet_pton(AF_INET, optarg, &daddr) != 1) {
+                std::cerr << "Invalid dest IP address: " << optarg << std::endl;
+                exit(1);
+            }
             break;
         case 'h':
         case '?':
@@ -302,32 +333,29 @@ int main(int argc, char** argv) {
     signal(SIGINT, exit_signal);
     signal(SIGTERM, exit_signal);
 
-    if (dmac) {
-        struct ifaddrs *ifaddr;
-        SYSCALL(getifaddrs(&ifaddr));
-        for (struct ifaddrs *ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
-            if (!strcmp(ifa->ifa_name, iname) && ifa->ifa_addr)
-            if (ifa->ifa_addr->sa_family == AF_PACKET) {
+    struct ifaddrs* ifaddr;
+    SYSCALL(getifaddrs(&ifaddr));
+    for (struct ifaddrs* ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+        if (!strcmp(ifa->ifa_name, iname) && ifa->ifa_addr) {
+            if (ifa->ifa_addr->sa_family == AF_PACKET && sender) {
                 struct sockaddr_ll* lladdr = (struct sockaddr_ll*)ifa->ifa_addr;
-                assert(lladdr->sll_halen == 6);
+                assert(lladdr->sll_halen == ETH_ALEN);
+                memcpy(smac, lladdr->sll_addr, ETH_ALEN);
                 printf("smac: %02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx\n",
-                        lladdr->sll_addr[0], lladdr->sll_addr[1], lladdr->sll_addr[2],
-                        lladdr->sll_addr[3], lladdr->sll_addr[4], lladdr->sll_addr[5]);
-            } else if (ifa->ifa_addr->sa_family == AF_INET) {
-                char s[INET_ADDRSTRLEN];
-                if (!inet_ntop(AF_INET, &((struct sockaddr_in*)ifa->ifa_addr)->sin_addr, s, INET_ADDRSTRLEN)) {
-                    std::cerr << "ERROR: unable to print IP address of interface " << iname << std::endl;
-                    exit(1);
-                }
-                printf("sip: %s\n", s);
+                        smac[0], smac[1], smac[2], smac[3], smac[4], smac[5]);
+            }
+
+            if (ifa->ifa_addr->sa_family == AF_INET) {
+                saddr = ((struct sockaddr_in*)ifa->ifa_addr)->sin_addr.s_addr;
             }
         }
-        freeifaddrs(ifaddr);
     }
+
+    freeifaddrs(ifaddr);
 
     setup_xdp();
 
-    if (dmac) {
+    if (sender) {
         request();
         recv();
     } else {
