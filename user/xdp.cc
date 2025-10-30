@@ -59,7 +59,7 @@ static uint16_t port = 0;
 static const uint32_t configKey = 0;
 
 static void usage(const char* prog) {
-    std::cerr << "usage: " << prog << " -i <interface> -q <queue> -p <port> [-d <destination-mac>] [-D <destination-ip>]" << std::endl;
+    std::cerr << "usage: " << prog << " -i <interface> -q <queue> -p <port> [-d <destination-mac>] [-D <destination-ip>] [-r <request>]" << std::endl;
 }
 
 static uint32_t checksum_nofold(void* data, size_t len, uint32_t sum)
@@ -282,7 +282,7 @@ static void recycle(void* pkt);
 
 int main(int argc, char** argv) {
     for (;;) {
-        int option = getopt( argc, argv, "d:i:q:p:D:h?" );
+        int option = getopt( argc, argv, "d:i:q:p:D:r:h?" );
         if ( option < 0 ) break;
         switch(option) {
         case 'd':
@@ -290,7 +290,6 @@ int main(int argc, char** argv) {
                 std::cerr << "Invalid MAC address\n";
                 exit(1);
             }
-            sender = true;
             break;
         case 'i':
             iname = optarg;
@@ -307,6 +306,8 @@ int main(int argc, char** argv) {
                 exit(1);
             }
             break;
+        case 'r':
+            sender = true;
         case 'h':
         case '?':
             usage(argv[0]);
@@ -335,7 +336,7 @@ int main(int argc, char** argv) {
     SYSCALL(getifaddrs(&ifaddr));
     for (struct ifaddrs* ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
         if (!strcmp(ifa->ifa_name, iname) && ifa->ifa_addr) {
-            if (ifa->ifa_addr->sa_family == AF_PACKET && sender) {
+            if (ifa->ifa_addr->sa_family == AF_PACKET) {
                 struct sockaddr_ll* lladdr = (struct sockaddr_ll*)ifa->ifa_addr;
                 assert(lladdr->sll_halen == ETH_ALEN);
                 memcpy(smac, lladdr->sll_addr, ETH_ALEN);
