@@ -308,6 +308,7 @@ int main(int argc, char** argv) {
             break;
         case 'r':
             sender = true;
+            break;
         case 'h':
         case '?':
             usage(argv[0]);
