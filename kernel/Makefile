@@ -6,7 +6,7 @@ SRC = xdp_filter.c
 all: $(OBJ)
 
 %.o: %.c
-	$(BPF_CLANG) $(BPF_CFLAGS) -I/usr/include -c $< -o $@
+	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 clean:
 	rm -f $(OBJ)
