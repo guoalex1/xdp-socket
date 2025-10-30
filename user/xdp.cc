@@ -59,7 +59,7 @@ static uint16_t port = 0;
 static const uint32_t configKey = 0;
 
 static void usage(const char* prog) {
-    std::cerr << "usage: " << prog << " -i <interface> -q <queue> -p <port> [-d <destination-mac>] [-a <destination-ip>]" << std::endl;
+    std::cerr << "usage: " << prog << " -i <interface> -q <queue> -p <port> [-d <destination-mac>] [-D <destination-ip>]" << std::endl;
 }
 
 static uint32_t checksum_nofold(void* data, size_t len, uint32_t sum)
@@ -185,8 +185,8 @@ static void send(const void* buf, size_t len) {
 
     memcpy(payload, buf, len);
 
-    memcpy(eth->h_source, smac, ETH_ALEN);
-    memcpy(eth->h_dest, dmac, ETH_ALEN);
+    // memcpy(eth->h_source, smac, ETH_ALEN);
+    // memcpy(eth->h_dest, dmac, ETH_ALEN);
     eth->h_proto = htons(ETH_P_IP);
 
     udp->source = htons(port);
@@ -220,20 +220,18 @@ static void send(const void* buf, size_t len) {
         tx_desc->len  = frame_len;
         xsk_ring_prod__submit(&xsk.tx, 1);
         SYSCALLIO(sendto(xsk.fd, nullptr, 0, MSG_DONTWAIT, nullptr, 0));
-        std::cout << "Sent UDP packet (" << frame_len << " bytes)" << std::endl;
     }
 }
 
 static void request() {
-    std::string req = "test";
-    send(req.data(), req.size());
+    const char req[] = "Request";
+    send(req, sizeof(req));
 }
 
 static void reply(const struct xdp_desc* desc, uint64_t addr) {
     release_tx();
     uint32_t idx = 0;
     if (xsk_ring_prod__reserve(&xsk.tx, 1, &idx) == 1) {
-        std::cout << "Reply" << std::endl;
         struct xdp_desc* tx_desc = xsk_ring_prod__tx_desc(&xsk.tx, idx);
         tx_desc->addr = addr;
         tx_desc->len = desc->len;
@@ -293,20 +291,14 @@ static void recycle(void* pkt);
 
 int main(int argc, char** argv) {
     for (;;) {
-        int option = getopt( argc, argv, "d:i:q:p:a:h?" );
+        int option = getopt( argc, argv, "d:i:q:p:D:h?" );
         if ( option < 0 ) break;
         switch(option) {
         case 'd':
-            int vals[ETH_ALEN];
-            if (sscanf(optarg, "%x:%x:%x:%x:%x:%x", &vals[0], &vals[1], &vals[2], &vals[3], &vals[4], &vals[5]) != ETH_ALEN) {
+            if (sscanf(optarg, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx", &dmac[0], &dmac[1], &dmac[2], &dmac[3], &dmac[4], &dmac[5]) != ETH_ALEN) {
                 std::cerr << "Invalid MAC address\n";
                 exit(1);
             }
-
-            for (int i = 0; i < ETH_ALEN; i++) {
-                dmac[i] = (unsigned char)vals[i];
-            }
-
             sender = true;
             break;
         case 'i':
@@ -318,7 +310,7 @@ int main(int argc, char** argv) {
         case 'p':
             port = atoi(optarg);
             break;
-        case 'a':
+        case 'D':
             if (inet_pton(AF_INET, optarg, &daddr) != 1) {
                 std::cerr << "Invalid dest IP address: " << optarg << std::endl;
                 exit(1);
