@@ -159,9 +159,6 @@ static void setup_xdp() {
     SYSCALL(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, xsk.fd, &epoll_ev));
 }
 
-static void send() {
-}
-
 static void release_tx() {
     uint32_t idx = 0;
     int completed = xsk_ring_cons__peek(&xsk.comp, QueueLength, &idx);
@@ -170,9 +167,12 @@ static void release_tx() {
     }
 }
 
-static void request() {
+static void send(const void* buf, size_t len) {
     release_tx();
-    const uint64_t frame_offset = 0;
+    static uint32_t next_frame = 0;
+    const uint64_t frame_offset = next_frame * XSK_UMEM__DEFAULT_FRAME_SIZE;
+    next_frame = (next_frame + 1) % QueueLength;
+
     void* data = xsk_umem__get_data(xsk.buffer, frame_offset);
 
     struct ethhdr* eth = (struct ethhdr*)data;
@@ -180,11 +180,7 @@ static void request() {
     struct udphdr* udp = (struct udphdr*)(iph + 1);
     char* payload       = (char*)(udp + 1);
 
-    char src_ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &saddr, src_ip, sizeof(src_ip));
-    std::string message = std::string("test ") + src_ip;
-    size_t payload_len = message.size();
-    memcpy(payload, message.data(), payload_len);
+    memcpy(payload, buf, len);
 
     memcpy(eth->h_source, smac, ETH_ALEN);
     memcpy(eth->h_dest, dmac, ETH_ALEN);
@@ -192,19 +188,19 @@ static void request() {
 
     udp->source = htons(port);
     udp->dest   = htons(port);
-    udp->len    = htons(sizeof(struct udphdr) + payload_len);
+    udp->len    = htons(sizeof(struct udphdr) + len);
     udp->check  = 0;
 
     iph->version = 4;
     iph->ihl = 5;
     iph->protocol = IPPROTO_UDP;
-    iph->tot_len = htons(sizeof(struct iphdr) + sizeof(struct udphdr) + payload_len);
+    iph->tot_len = htons(sizeof(struct iphdr) + sizeof(struct udphdr) + len);
     iph->ttl = 64;
     iph->daddr = daddr;
     iph->saddr = saddr;
     iph->check = checksum_fold(iph, sizeof(*iph), 0);
 
-    const uint32_t frame_len = sizeof(*eth) + sizeof(*iph) + sizeof(*udp) + payload_len;
+    const uint32_t frame_len = sizeof(*eth) + sizeof(*iph) + sizeof(*udp) + len;
 
     uint32_t idx;
     if (xsk_ring_prod__reserve(&xsk.tx, 1, &idx) == 1) {
@@ -213,13 +209,18 @@ static void request() {
         tx_desc->len  = frame_len;
         xsk_ring_prod__submit(&xsk.tx, 1);
         SYSCALLIO(sendto(xsk.fd, nullptr, 0, MSG_DONTWAIT, nullptr, 0));
-        std::cout << "Sent UDP request (" << frame_len << " bytes)" << std::endl;
+        std::cout << "Sent UDP packet (" << frame_len << " bytes)" << std::endl;
     }
 }
 
+static void request() {
+    std::string req = "test";
+    send(req.data(), req.size());
+}
+
 static void reply(const struct xdp_desc* desc, uint64_t addr) {
-    uint32_t idx = 0;
     release_tx();
+    uint32_t idx = 0;
     if (xsk_ring_prod__reserve(&xsk.tx, 1, &idx) == 1) {
         std::cout << "Reply" << std::endl;
         struct xdp_desc* tx_desc = xsk_ring_prod__tx_desc(&xsk.tx, idx);
@@ -267,12 +268,6 @@ static void recv() {
                 } else {
                     std::cout << "Non UDP packet" << std::endl;
                 }
-
-                swap_mac(eth);
-                std::swap(iph->saddr, iph->daddr);
-                iph->check = checksum_fold(iph, sizeof(*iph), 0);
-
-                reply(desc, addr);
             }
 
             if (xsk_ring_prod__reserve(&xsk.fill, 1, &idx) == 1) {
