@@ -2,7 +2,7 @@
 
 # Compiler and flags
 CXX = g++
-CXXFLAGS = -O3 -I/home/ubuntu1/xdp-tools/headers
+CXXFLAGS = -O3 -I$(XDP_INCLUDE)
 
 # Output binary
 TARGET = xdp
@@ -10,7 +10,7 @@ TARGET = xdp
 SRC = xdp.cc
 
 # Library path and linked libraries
-LDFLAGS = -L/home/ubuntu1/xdp-tools/lib/libxdp/ -L/home/ubuntu1/xdp-tools/lib/libbpf/
+LDFLAGS = -L$(XDP_LIB) -L$(BPF_LIB)
 LDLIBS = -lxdp -lbpf
 
 all: $(TARGET)
