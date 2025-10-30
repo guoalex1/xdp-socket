@@ -66,11 +66,13 @@ static uint32_t checksum_nofold(void* data, size_t len, uint32_t sum)
 {
 	uint16_t* words = (uint16_t*)data;
 
-	for (int i = 0; i < len / 2; i++)
+	for (int i = 0; i < len / 2; i++) {
 		sum += words[i];
+    }
 
-	if (len & 1)
+	if (len & 1) {
 		sum += ((unsigned char*)data)[len - 1];
+    }
 
 	return sum;
 }
@@ -79,8 +81,9 @@ static uint16_t checksum_fold(void* data, size_t len, uint32_t sum)
 {
 	sum = checksum_nofold(data, len, sum);
 
-	while (sum > 0xFFFF)
+	while (sum > 0xFFFF) {
         sum = (sum & 0xFFFF) + (sum >> 16);
+    }
 
 	return ~sum;
 }
@@ -189,7 +192,15 @@ static void send(const void* buf, size_t len) {
     udp->source = htons(port);
     udp->dest   = htons(port);
     udp->len    = htons(sizeof(struct udphdr) + len);
-    udp->check  = 0;
+
+    uint32_t sum = (iph->saddr >> 16) & 0xFFFF;
+    sum += (iph->saddr) & 0xFFFF;
+    sum += (iph->daddr >> 16) & 0xFFFF;
+    sum += (iph->daddr) & 0xFFFF;
+    sum = checksum_nofold(udp, sizeof(*udp) + len, sum);
+    sum += htons(IPPROTO_UDP);
+    sum += udp->len;
+    udp->check = checksum_fold(NULL, 0, sum);
 
     iph->version = 4;
     iph->ihl = 5;
