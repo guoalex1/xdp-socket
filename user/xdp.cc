@@ -116,7 +116,7 @@ static void setup_xdp() {
                                             .tx_size = QueueLength,
                                             .libbpf_flags = XSK_LIBXDP_FLAGS__INHIBIT_PROG_LOAD, // don't load default xdp program
                                             .xdp_flags = XDP_FLAGS_SKB_MODE, // XDP_FLAGS_DRV_MODE
-                                            .bind_flags = XDP_COPY }; // XDP_ZEROCOPY | XDP_USE_NEED_WAKEUP
+                                            .bind_flags = XDP_COPY | XDP_USE_NEED_WAKEUP }; // XDP_ZEROCOPY | XDP_USE_NEED_WAKEUP
     SYSCALL(xsk_socket__create(&xsk.socket, iname, queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
     xsk.fd = xsk_socket__fd(xsk.socket);
 
@@ -162,7 +162,16 @@ static void setup_xdp() {
 static void send() {
 }
 
+static void release_tx() {
+    uint32_t idx = 0;
+    int completed = xsk_ring_cons__peek(&xsk.comp, QueueLength, &idx);
+    if (completed > 0) {
+        xsk_ring_cons__release(&xsk.comp, completed);
+    }
+}
+
 static void request() {
+    release_tx();
     const uint64_t frame_offset = 0;
     void* data = xsk_umem__get_data(xsk.buffer, frame_offset);
 
@@ -208,9 +217,9 @@ static void request() {
     }
 }
 
-
 static void reply(const struct xdp_desc* desc, uint64_t addr) {
-    uint32_t idx;
+    uint32_t idx = 0;
+    release_tx();
     if (xsk_ring_prod__reserve(&xsk.tx, 1, &idx) == 1) {
         std::cout << "Reply" << std::endl;
         struct xdp_desc* tx_desc = xsk_ring_prod__tx_desc(&xsk.tx, idx);
