@@ -88,15 +88,6 @@ static uint16_t checksum_fold(void* data, size_t len, uint32_t sum)
 	return ~sum;
 }
 
-static inline void swap_mac(struct ethhdr* eth)
-{
-    unsigned char tmp[ETH_ALEN];
-    memcpy(tmp, eth->h_source, ETH_ALEN);
-    memcpy(eth->h_source, eth->h_dest, ETH_ALEN);
-    memcpy(eth->h_dest, tmp, ETH_ALEN);
-}
-
-
 static void cleanup() {
     if (xsk.socket) xsk_socket__delete(xsk.socket);
 }
@@ -185,8 +176,8 @@ static void send(const void* buf, size_t len) {
 
     memcpy(payload, buf, len);
 
-    // memcpy(eth->h_source, smac, ETH_ALEN);
-    // memcpy(eth->h_dest, dmac, ETH_ALEN);
+    memcpy(eth->h_source, smac, ETH_ALEN);
+    memcpy(eth->h_dest, dmac, ETH_ALEN);
     eth->h_proto = htons(ETH_P_IP);
 
     udp->source = htons(port);
