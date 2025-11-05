@@ -102,18 +102,9 @@ static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, const so
     memcpy(eth->h_dest, dmac, ETH_ALEN);
     eth->h_proto = htons(ETH_P_IP);
 
-    udph->source = htons(addr->sin_port);
-    udph->dest   = htons(addr->sin_port);
+    udph->source = addr->sin_port;
+    udph->dest   = addr->sin_port;
     udph->len    = htons(sizeof(struct udphdr) + len);
-
-    uint32_t sum = (iph->saddr >> 16) & 0xFFFF;
-    sum += (iph->saddr) & 0xFFFF;
-    sum += (iph->daddr >> 16) & 0xFFFF;
-    sum += (iph->daddr) & 0xFFFF;
-    sum = checksum_nofold(udph, sizeof(*udph) + len, sum);
-    sum += htons(IPPROTO_UDP);
-    sum += udph->len;
-    udph->check = checksum_fold(NULL, 0, sum);
 
     iph->version = 4;
     iph->ihl = 5;
@@ -123,6 +114,15 @@ static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, const so
     iph->daddr = addr->sin_addr.s_addr;
     iph->saddr = saddr;
     iph->check = checksum_fold(iph, sizeof(*iph), 0);
+
+    uint32_t sum = (iph->saddr >> 16) & 0xFFFF;
+    sum += (iph->saddr) & 0xFFFF;
+    sum += (iph->daddr >> 16) & 0xFFFF;
+    sum += (iph->daddr) & 0xFFFF;
+    sum = checksum_nofold(udph, sizeof(*udph) + len, sum);
+    sum += htons(IPPROTO_UDP);
+    sum += udph->len;
+    udph->check = checksum_fold(NULL, 0, sum);
 
     return sizeof(*eth) + sizeof(*iph) + sizeof(*udph) + len;
 }
