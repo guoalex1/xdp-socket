@@ -40,12 +40,6 @@ struct xsk_queue {
     uint32_t queue = 0;
     char smac[ETH_ALEN];
     uint32_t saddr = 0;
-
-    ~xsk_queue() {
-        if (socket) {
-            xsk_socket__delete(socket);
-        }
-    }
 };
 
 static std::unordered_map<int, xsk_queue> fd_to_xsk = {};
