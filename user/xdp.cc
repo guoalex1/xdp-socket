@@ -127,43 +127,6 @@ static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, const so
     return sizeof(*eth) + sizeof(*iph) + sizeof(*udph) + len;
 }
 
-int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
-    if (fd_to_xsk.count(sockfd) == 0) {
-        return -1;
-    }
-
-    xsk_queue& xsk = fd_to_xsk[sockfd];
-
-    struct addressConfig config{};
-
-    if (addr->sa_family == AF_INET && addrlen >= sizeof(struct sockaddr_in)) {
-        struct sockaddr_in* sin = (struct sockaddr_in*)addr;
-        config.ip = sin->sin_addr.s_addr;
-        config.port = sin->sin_port;
-    } else {
-        return -1;
-    }
-
-    // xsks_map
-    int map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsks_map");
-    int sock_fd = xsk_socket__fd(xsk.socket);
-    bpf_map_update_elem(map_fd, &xsk.queue, &sock_fd, BPF_ANY);
-
-    // config_map
-    int config_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/config_map");
-    if (config_fd < 0) {
-        std::cerr << "Error getting config_map" << std::endl;
-        return -1;
-    }
-
-    if (bpf_map_update_elem(config_fd, &configKey, &config, BPF_ANY) < 0) {
-        std::cerr << "bpf_map_update_elem config_map" << std::endl;
-        return -1;
-    }
-
-    return 0;
-}
-
 int a_socket(uint32_t queue, const char* ifname) {
     if (ifname == nullptr) {
         return -1;
@@ -225,6 +188,43 @@ int a_socket(uint32_t queue, const char* ifname) {
 
     fd_to_xsk[xsk.fd] = xsk;
     return xsk.fd;
+}
+
+int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
+    if (fd_to_xsk.count(sockfd) == 0) {
+        return -1;
+    }
+
+    xsk_queue& xsk = fd_to_xsk[sockfd];
+
+    struct addressConfig config{};
+
+    if (addr->sa_family == AF_INET && addrlen >= sizeof(struct sockaddr_in)) {
+        struct sockaddr_in* sin = (struct sockaddr_in*)addr;
+        config.ip = sin->sin_addr.s_addr;
+        config.port = sin->sin_port;
+    } else {
+        return -1;
+    }
+
+    // xsks_map
+    int map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsks_map");
+    int sock_fd = xsk_socket__fd(xsk.socket);
+    bpf_map_update_elem(map_fd, &xsk.queue, &sock_fd, BPF_ANY);
+
+    // config_map
+    int config_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/config_map");
+    if (config_fd < 0) {
+        std::cerr << "Error getting config_map" << std::endl;
+        return -1;
+    }
+
+    if (bpf_map_update_elem(config_fd, &configKey, &config, BPF_ANY) < 0) {
+        std::cerr << "bpf_map_update_elem config_map" << std::endl;
+        return -1;
+    }
+
+    return 0;
 }
 
 ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struct sockaddr* dest_addr, socklen_t addrlen, const char* dmac) {
