@@ -17,19 +17,13 @@
 #include <csignal>
 #include <cstring>
 #include <iostream>
+#include <unordered_map>
+#include <algorithm>
+
+#include "xdp.h"
 
 #define TESTING_ENABLE_ASSERTIONS 1
 #include "syscall_macro.h"
-
-static char* iname = nullptr;
-static unsigned int queue = 0;
-
-static in_addr_t saddr = 0;
-static in_addr_t daddr = 0;
-
-static unsigned char smac[ETH_ALEN] = {0};
-static unsigned char dmac[ETH_ALEN] = {0};
-static bool sender = false;
 
 static const unsigned int QueueLength = 16;
 static const unsigned int BufferSize = XSK_UMEM__DEFAULT_FRAME_SIZE * QueueLength * 2;
@@ -43,9 +37,18 @@ struct xsk_queue {
     struct xsk_umem* umem;
     void* buffer;
     int fd;
+    uint32_t queue = 0;
+    char smac[ETH_ALEN];
+    uint32_t saddr = 0;
+
+    ~xsk_queue() {
+        if (socket) {
+            xsk_socket__delete(socket);
+        }
+    }
 };
 
-static struct xsk_queue xsk = {0};
+static std::unordered_map<int, xsk_queue> fd_to_xsk = {};
 
 static int epoll_fd = -1;
 static struct epoll_event epoll_ev = {0};
@@ -55,12 +58,7 @@ struct addressConfig {
     uint16_t port;
 };
 
-static uint16_t port = 0;
 static const uint32_t configKey = 0;
-
-static void usage(const char* prog) {
-    std::cerr << "usage: " << prog << " -i <interface> -q <queue> -p <port> [-d <destination-mac>] [-D <destination-ip>] [-r <request>]" << std::endl;
-}
 
 static uint32_t checksum_nofold(void* data, size_t len, uint32_t sum)
 {
@@ -88,18 +86,96 @@ static uint16_t checksum_fold(void* data, size_t len, uint32_t sum)
 	return ~sum;
 }
 
-static void cleanup() {
-    if (xsk.socket) xsk_socket__delete(xsk.socket);
+static void release_tx(xsk_queue& xsk) {
+    uint32_t idx = 0;
+    int completed = xsk_ring_cons__peek(&xsk.comp, QueueLength, &idx);
+    if (completed > 0) {
+        xsk_ring_cons__release(&xsk.comp, completed);
+    }
 }
 
-static void exit_signal(int) {
-    exit(1);
+// Returns size
+// TODO: Add check for buf len
+static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, const sockaddr_in* addr, const char* smac, const char* dmac, uint32_t saddr) {
+    struct ethhdr* eth = (struct ethhdr*)data;
+    struct iphdr*  iph = (struct iphdr*)(eth + 1);
+    struct udphdr* udph = (struct udphdr*)(iph + 1);
+    char* payload       = (char*)(udph + 1);
+
+    memcpy(payload, buf, len);
+
+    memcpy(eth->h_source, smac, ETH_ALEN);
+    memcpy(eth->h_dest, dmac, ETH_ALEN);
+    eth->h_proto = htons(ETH_P_IP);
+
+    udph->source = htons(addr->sin_port);
+    udph->dest   = htons(addr->sin_port);
+    udph->len    = htons(sizeof(struct udphdr) + len);
+
+    uint32_t sum = (iph->saddr >> 16) & 0xFFFF;
+    sum += (iph->saddr) & 0xFFFF;
+    sum += (iph->daddr >> 16) & 0xFFFF;
+    sum += (iph->daddr) & 0xFFFF;
+    sum = checksum_nofold(udph, sizeof(*udph) + len, sum);
+    sum += htons(IPPROTO_UDP);
+    sum += udph->len;
+    udph->check = checksum_fold(NULL, 0, sum);
+
+    iph->version = 4;
+    iph->ihl = 5;
+    iph->protocol = IPPROTO_UDP;
+    iph->tot_len = htons(sizeof(*iph) + sizeof(*udph) + len);
+    iph->ttl = 64;
+    iph->daddr = addr->sin_addr.s_addr;
+    iph->saddr = saddr;
+    iph->check = checksum_fold(iph, sizeof(*iph), 0);
+
+    return sizeof(*eth) + sizeof(*iph) + sizeof(*udph) + len;
 }
 
-static void setup_pkt() {
+int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
+    if (fd_to_xsk.count(sockfd) == 0) {
+        return -1;
+    }
+
+    xsk_queue& xsk = fd_to_xsk[sockfd];
+
+    struct addressConfig config{};
+
+    if (addr->sa_family == AF_INET && addrlen >= sizeof(struct sockaddr_in)) {
+        struct sockaddr_in* sin = (struct sockaddr_in*)addr;
+        config.ip = sin->sin_addr.s_addr;
+        config.port = sin->sin_port;
+    } else {
+        return -1;
+    }
+
+    // xsks_map
+    int map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsks_map");
+    int sock_fd = xsk_socket__fd(xsk.socket);
+    bpf_map_update_elem(map_fd, &xsk.queue, &sock_fd, BPF_ANY);
+
+    // config_map
+    int config_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/config_map");
+    if (config_fd < 0) {
+        std::cerr << "Error getting config_map" << std::endl;
+        return -1;
+    }
+
+    if (bpf_map_update_elem(config_fd, &configKey, &config, BPF_ANY) < 0) {
+        std::cerr << "bpf_map_update_elem config_map" << std::endl;
+        return -1;
+    }
+
+    return 0;
 }
 
-static void setup_xdp() {
+int a_socket(uint32_t queue, const char* ifname) {
+    if (ifname == nullptr) {
+        return -1;
+    }
+
+    xsk_queue xsk{};
     xsk.buffer = mmap(NULL, BufferSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     assert(xsk.buffer != MAP_FAILED);
 
@@ -111,36 +187,17 @@ static void setup_xdp() {
                                             .libbpf_flags = XSK_LIBXDP_FLAGS__INHIBIT_PROG_LOAD, // don't load default xdp program
                                             .xdp_flags = XDP_FLAGS_SKB_MODE, // XDP_FLAGS_DRV_MODE
                                             .bind_flags = XDP_COPY | XDP_USE_NEED_WAKEUP }; // XDP_ZEROCOPY | XDP_USE_NEED_WAKEUP
-    SYSCALL(xsk_socket__create(&xsk.socket, iname, queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
+    SYSCALL(xsk_socket__create(&xsk.socket, ifname, queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
     xsk.fd = xsk_socket__fd(xsk.socket);
 
-    // xsks_map
-    int map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsks_map");
-    int sock_fd = xsk_socket__fd(xsk.socket);
-    bpf_map_update_elem(map_fd, &queue, &sock_fd, BPF_ANY);
-
-    // config_map
-    int config_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/config_map");
-    if (config_fd < 0) {
-        std::cerr << "Error getting config_map" << std::endl;
-        exit(1);
-    }
-
-    struct addressConfig config{saddr, htons(port)};
-
-    if (bpf_map_update_elem(config_fd, &configKey, &config, BPF_ANY) < 0) {
-        std::cerr << "bpf_map_update_elem config_map" << std::endl;
-        exit(1);
-    }
-
-    __u32 idx;
-    __u32 cnt = xsk_ring_prod__reserve(&xsk.fill, QueueLength, &idx);
+    uint32_t idx;
+    uint32_t cnt = xsk_ring_prod__reserve(&xsk.fill, QueueLength, &idx);
     if (idx != 0 || cnt != QueueLength) {
         std::cerr << "ERROR: RX fill ring failed: " << cnt << ' ' << idx << std::endl;
-        exit(1);
+        return -1;
     }
     // fill ring is second half of umem
-    __u64 reladdr = XSK_UMEM__DEFAULT_FRAME_SIZE * QueueLength;
+    uint64_t reladdr = XSK_UMEM__DEFAULT_FRAME_SIZE * QueueLength;
     for (int i = 0; i < QueueLength; i += 1) {
         *xsk_ring_prod__fill_addr(&xsk.fill, i) = reladdr;
         reladdr += XSK_UMEM__DEFAULT_FRAME_SIZE;
@@ -151,58 +208,46 @@ static void setup_xdp() {
     epoll_ev.events = EPOLLIN;
     epoll_ev.data.fd = xsk.fd;
     SYSCALL(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, xsk.fd, &epoll_ev));
-}
 
-static void release_tx() {
-    uint32_t idx = 0;
-    int completed = xsk_ring_cons__peek(&xsk.comp, QueueLength, &idx);
-    if (completed > 0) {
-        xsk_ring_cons__release(&xsk.comp, completed);
+    xsk.queue = queue;
+
+    struct ifaddrs* ifaddr;
+    SYSCALL(getifaddrs(&ifaddr));
+    for (struct ifaddrs* ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+        if (!strcmp(ifa->ifa_name, ifname) && ifa->ifa_addr) {
+            if (ifa->ifa_addr->sa_family == AF_PACKET) {
+                struct sockaddr_ll* lladdr = (struct sockaddr_ll*)ifa->ifa_addr;
+                assert(lladdr->sll_halen == ETH_ALEN);
+                memcpy(xsk.smac, lladdr->sll_addr, ETH_ALEN);
+            }
+
+            if (ifa->ifa_addr->sa_family == AF_INET) {
+                xsk.saddr = ((struct sockaddr_in*)ifa->ifa_addr)->sin_addr.s_addr;
+            }
+        }
     }
+
+    freeifaddrs(ifaddr);
+
+    fd_to_xsk[xsk.fd] = xsk;
+    return xsk.fd;
 }
 
-static void send(const void* buf, size_t len) {
-    release_tx();
+ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struct sockaddr* dest_addr, socklen_t addrlen, const char* dmac) {
+    if (dest_addr == nullptr || fd_to_xsk.count(sockfd) == 0) {
+        return -1;
+    }
+
+    xsk_queue& xsk = fd_to_xsk[sockfd];
+
+    release_tx(xsk);
     static uint32_t next_frame = 0;
     const uint64_t frame_offset = next_frame * XSK_UMEM__DEFAULT_FRAME_SIZE;
     next_frame = (next_frame + 1) % QueueLength;
 
     void* data = xsk_umem__get_data(xsk.buffer, frame_offset);
 
-    struct ethhdr* eth = (struct ethhdr*)data;
-    struct iphdr*  iph = (struct iphdr*)(eth + 1);
-    struct udphdr* udp = (struct udphdr*)(iph + 1);
-    char* payload       = (char*)(udp + 1);
-
-    memcpy(payload, buf, len);
-
-    memcpy(eth->h_source, smac, ETH_ALEN);
-    memcpy(eth->h_dest, dmac, ETH_ALEN);
-    eth->h_proto = htons(ETH_P_IP);
-
-    udp->source = htons(port);
-    udp->dest   = htons(port);
-    udp->len    = htons(sizeof(struct udphdr) + len);
-
-    uint32_t sum = (iph->saddr >> 16) & 0xFFFF;
-    sum += (iph->saddr) & 0xFFFF;
-    sum += (iph->daddr >> 16) & 0xFFFF;
-    sum += (iph->daddr) & 0xFFFF;
-    sum = checksum_nofold(udp, sizeof(*udp) + len, sum);
-    sum += htons(IPPROTO_UDP);
-    sum += udp->len;
-    udp->check = checksum_fold(NULL, 0, sum);
-
-    iph->version = 4;
-    iph->ihl = 5;
-    iph->protocol = IPPROTO_UDP;
-    iph->tot_len = htons(sizeof(struct iphdr) + sizeof(struct udphdr) + len);
-    iph->ttl = 64;
-    iph->daddr = daddr;
-    iph->saddr = saddr;
-    iph->check = checksum_fold(iph, sizeof(*iph), 0);
-
-    const uint32_t frame_len = sizeof(*eth) + sizeof(*iph) + sizeof(*udp) + len;
+    const uint32_t frame_len = setup_ipv4_pkt(data, buf, len, (sockaddr_in*)dest_addr, xsk.smac, dmac, xsk.saddr);
 
     uint32_t idx;
     if (xsk_ring_prod__reserve(&xsk.tx, 1, &idx) == 1) {
@@ -211,155 +256,57 @@ static void send(const void* buf, size_t len) {
         tx_desc->len  = frame_len;
         xsk_ring_prod__submit(&xsk.tx, 1);
         SYSCALLIO(sendto(xsk.fd, nullptr, 0, MSG_DONTWAIT, nullptr, 0));
+        return len;
     }
+
+    return -1;
 }
 
-static void request() {
-    const char req[] = "Request";
-    send(req, sizeof(req));
-}
-
-static void reply(const struct xdp_desc* desc, uint64_t addr) {
-    release_tx();
-    uint32_t idx = 0;
-    if (xsk_ring_prod__reserve(&xsk.tx, 1, &idx) == 1) {
-        struct xdp_desc* tx_desc = xsk_ring_prod__tx_desc(&xsk.tx, idx);
-        tx_desc->addr = addr;
-        tx_desc->len = desc->len;
-        xsk_ring_prod__submit(&xsk.tx, 1);
-        SYSCALLIO(sendto(xsk.fd, nullptr, 0, MSG_DONTWAIT, nullptr, 0));
-    }
-}
-
-static void recv() {
-    static size_t count = 0;
+ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr* src_addr, socklen_t addrlen) {
     for (;;) {
 //        SYSCALLIO(epoll_pwait2(epoll_fd, &epoll_ev, 1, NULL, NULL));
 //        struct pollfd fds = { xsk.fd, POLLIN };
 //        SYSCALLIO(poll(&fds, 1, -1));
 //        SYSCALLIO(recvfrom(xsk.fd, NULL, 0, MSG_DONTWAIT, NULL, NULL));
-        __u32 idx;
-        __u32 n = xsk_ring_cons__peek(&xsk.rx, 1, &idx);
-        for (; n > 0; n -= 1, idx += 1) {
-            const struct xdp_desc* desc = xsk_ring_cons__rx_desc(&xsk.rx, idx);
-            __u64 addr = xsk_umem__add_offset_to_addr(desc->addr);
-            void* data = xsk_umem__get_data(xsk.buffer, addr);
-            addr = xsk_umem__extract_addr(desc->addr);
-            xsk_ring_cons__release(&xsk.rx, 1);
-
-            struct ethhdr* eth = (struct ethhdr*)data;
-            if (ntohs(eth->h_proto) == ETH_P_IP) {
-                struct iphdr* iph = (struct iphdr*)(eth + 1);
-                char src_ip[INET_ADDRSTRLEN];
-                char dst_ip[INET_ADDRSTRLEN];
-                inet_ntop(AF_INET, &iph->saddr, src_ip, sizeof(src_ip));
-                inet_ntop(AF_INET, &iph->daddr, dst_ip, sizeof(dst_ip));
-
-                if (iph->protocol == IPPROTO_UDP) {
-                    struct udphdr* udp = (struct udphdr*)(iph + 1);
-                    ++count;
-                    std::cout << "UDP packet " << count << ": " << src_ip << " -> " << dst_ip << ":" << ntohs(udp->source)
-                            << " -> " << ntohs(udp->dest) << " | length " << desc->len << std::endl;
-                    char* payload = (char*)(udp + 1);
-                    size_t payload_len = desc->len - ((uint8_t*)payload - (uint8_t*)data);
-
-                    std::string udp_data(payload, payload_len);
-                    std::cout << "Payload string: \"" << udp_data << "\"" << std::endl;
-                } else {
-                    std::cout << "Non UDP packet" << std::endl;
-                }
-            }
-
-            if (xsk_ring_prod__reserve(&xsk.fill, 1, &idx) == 1) {
-                *xsk_ring_prod__fill_addr(&xsk.fill, idx) = addr;
-                xsk_ring_prod__submit(&xsk.fill, 1);
-            }
+        if (fd_to_xsk.count(sockfd) == 0) {
+            return -1;
         }
-    }
-}
 
-static void recycle(void* pkt);
-
-int main(int argc, char** argv) {
-    for (;;) {
-        int option = getopt( argc, argv, "d:i:q:p:D:r:h?" );
-        if ( option < 0 ) break;
-        switch(option) {
-        case 'd':
-            if (sscanf(optarg, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx", &dmac[0], &dmac[1], &dmac[2], &dmac[3], &dmac[4], &dmac[5]) != ETH_ALEN) {
-                std::cerr << "Invalid MAC address\n";
-                exit(1);
-            }
-            break;
-        case 'i':
-            iname = optarg;
-            break;
-        case 'q':
-            queue = atoi(optarg);
-            break;
-        case 'p':
-            port = atoi(optarg);
-            break;
-        case 'D':
-            if (inet_pton(AF_INET, optarg, &daddr) != 1) {
-                std::cerr << "Invalid dest IP address: " << optarg << std::endl;
-                exit(1);
-            }
-            break;
-        case 'r':
-            sender = true;
-            break;
-        case 'h':
-        case '?':
-            usage(argv[0]);
-            exit(1);
-        default:
-            std::cerr << "unknown option: -" << (char)option << std::endl;
-            usage(argv[0]);
-            exit(1);
+        xsk_queue& xsk = fd_to_xsk[sockfd];
+        uint32_t idx;
+        uint32_t n = xsk_ring_cons__peek(&xsk.rx, 1, &idx);
+        if (n < 1) {
+            return -1;
         }
-    }
-    if (argc != optind) {
-        std::cerr << "unknown argument: " << argv[optind] << std::endl;
-        usage(argv[0]);
-        exit(1);
-    }
-    if (!iname) {
-        std::cerr << "ERROR: no interface name given" << std::endl;
-        exit(1);
-    }
 
-    SYSCALL(atexit(cleanup));
-    signal(SIGINT, exit_signal);
-    signal(SIGTERM, exit_signal);
+        const struct xdp_desc* desc = xsk_ring_cons__rx_desc(&xsk.rx, idx);
+        uint64_t addr = xsk_umem__add_offset_to_addr(desc->addr);
+        void* data = xsk_umem__get_data(xsk.buffer, addr);
+        addr = xsk_umem__extract_addr(desc->addr);
+        xsk_ring_cons__release(&xsk.rx, 1);
 
-    struct ifaddrs* ifaddr;
-    SYSCALL(getifaddrs(&ifaddr));
-    for (struct ifaddrs* ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
-        if (!strcmp(ifa->ifa_name, iname) && ifa->ifa_addr) {
-            if (ifa->ifa_addr->sa_family == AF_PACKET) {
-                struct sockaddr_ll* lladdr = (struct sockaddr_ll*)ifa->ifa_addr;
-                assert(lladdr->sll_halen == ETH_ALEN);
-                memcpy(smac, lladdr->sll_addr, ETH_ALEN);
-                printf("smac: %02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx\n",
-                        smac[0], smac[1], smac[2], smac[3], smac[4], smac[5]);
-            }
+        // XDP guarantees UDP packets
+        struct ethhdr* eth = (struct ethhdr*)data;
+        struct iphdr* iph = (struct iphdr*)(eth + 1);
+        struct udphdr* udph = (struct udphdr*)(iph + 1);
+        void* payload = (void*)(udph + 1);
+        size_t payload_len = desc->len - ((uint8_t*)payload - (uint8_t*)data);
 
-            if (ifa->ifa_addr->sa_family == AF_INET) {
-                saddr = ((struct sockaddr_in*)ifa->ifa_addr)->sin_addr.s_addr;
-            }
+        int copy_size = std::max(len, payload_len);
+        memcpy(buf, payload, copy_size);
+
+        if (src_addr != nullptr && src_addr->sa_family == AF_INET && addrlen >= sizeof(struct sockaddr_in)) {
+            struct sockaddr_in* sin = (struct sockaddr_in*)src_addr;
+            sin->sin_family = AF_INET;
+            sin->sin_addr.s_addr = iph->saddr;
+            sin->sin_port = udph->source;
         }
+
+        if (xsk_ring_prod__reserve(&xsk.fill, 1, &idx) == 1) {
+            *xsk_ring_prod__fill_addr(&xsk.fill, idx) = addr;
+            xsk_ring_prod__submit(&xsk.fill, 1);
+        }
+
+        return copy_size;
     }
-
-    freeifaddrs(ifaddr);
-
-    setup_xdp();
-
-    if (sender) {
-        request();
-        recv();
-    } else {
-        recv();
-    }
-    return 0;
 }
