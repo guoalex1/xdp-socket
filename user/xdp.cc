@@ -286,7 +286,7 @@ ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr
         void* payload = (void*)(udph + 1);
         size_t payload_len = desc->len - ((uint8_t*)payload - (uint8_t*)data);
 
-        int copy_size = std::max(len, payload_len);
+        int copy_size = std::min(len, payload_len);
         memcpy(buf, payload, copy_size);
 
         if (src_addr != nullptr && src_addr->sa_family == AF_INET && addrlen >= sizeof(struct sockaddr_in)) {
