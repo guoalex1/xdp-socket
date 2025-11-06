@@ -1,22 +1,15 @@
-# Makefile
-
 # Compiler and flags
 CXX = g++
-CXXFLAGS = -O3 -I$(XDP_INCLUDE) -shared -fPIC -Wall
+CXXFLAGS = -O3 -Wall -c -I$(XDP_INCLUDE)
 
-# Output binary
-TARGET = a_xdp.so
-
+# Output
+OBJ = a_xdp.o
 SRC = xdp.cc
 
-# Library path and linked libraries
-LDFLAGS = -L$(XDP_LIB) -L$(BPF_LIB)
-LDLIBS = -lxdp -lbpf
+all: $(OBJ)
 
-all: $(TARGET)
-
-$(TARGET): $(SRC)
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+$(OBJ): $(SRC)
+	$(CXX) $(CXXFLAGS) -o $@ $^
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(OBJ)
