@@ -2,10 +2,10 @@
 
 # Compiler and flags
 CXX = g++
-CXXFLAGS = -O3 -I$(XDP_INCLUDE) -c -fPIC
+CXXFLAGS = -O3 -I$(XDP_INCLUDE) -shared -fPIC -Wall
 
 # Output binary
-TARGET = xdp.o
+TARGET = a_xdp.so
 
 SRC = xdp.cc
 

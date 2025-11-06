@@ -58,7 +58,7 @@ static uint32_t checksum_nofold(void* data, size_t len, uint32_t sum)
 {
 	uint16_t* words = (uint16_t*)data;
 
-	for (int i = 0; i < len / 2; i++) {
+	for (size_t i = 0; i < len / 2; i++) {
 		sum += words[i];
     }
 
@@ -155,7 +155,7 @@ int a_socket(uint32_t queue, const char* ifname) {
     }
     // fill ring is second half of umem
     uint64_t reladdr = XSK_UMEM__DEFAULT_FRAME_SIZE * QueueLength;
-    for (int i = 0; i < QueueLength; i += 1) {
+    for (size_t i = 0; i < QueueLength; i += 1) {
         *xsk_ring_prod__fill_addr(&xsk.fill, i) = reladdr;
         reladdr += XSK_UMEM__DEFAULT_FRAME_SIZE;
     }
