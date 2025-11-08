@@ -62,7 +62,6 @@ int xdp_xsk_filter(struct xdp_md* ctx)
         return XDP_PASS;
     }
 
-    __u32 key = 0;
     struct config* cfg = bpf_map_lookup_elem(&config_map, &config_key);
     if (!cfg) {
         return XDP_PASS;
