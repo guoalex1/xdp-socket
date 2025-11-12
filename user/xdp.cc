@@ -127,7 +127,7 @@ static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, const so
     return sizeof(*eth) + sizeof(*iph) + sizeof(*udph) + len;
 }
 
-int a_socket(uint32_t queue, const char* ifname) {
+int a_socket(const char* ifname, uint32_t queue) {
     if (ifname == nullptr) {
         return -1;
     }
@@ -304,4 +304,29 @@ ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr
 
         return copy_size;
     }
+}
+
+int a_close(int sockfd) {
+    if (fd_to_xsk.count(sockfd) == 0) {
+        errno = EBADF;
+        return -1;
+    }
+
+    xsk_queue& xsk = fd_to_xsk[sockfd];
+
+    if (xsk.socket) {
+        xsk_socket__delete(xsk.socket);
+    }
+
+    if (xsk.umem) {
+        xsk_umem__delete(xsk.umem);
+    }
+
+    if (xsk.buffer) {
+        munmap(xsk.buffer, BufferSize);
+    }
+
+    fd_to_xsk.erase(sockfd);
+
+    return 0;
 }
