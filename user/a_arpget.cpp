@@ -67,7 +67,10 @@ static int arp_exchange(int fd, const char src_mac[ETH_ALEN], uint32_t src_ip, u
     for (;;) {
         unsigned char buf[60];
         ssize_t n = recv(fd, buf, sizeof(buf), 0);
-        if (n < 42) continue;
+
+        if (n < 42) {
+            continue;
+        }
 
         struct ethhdr* reth = (struct ethhdr*)buf;
         struct arp* rarp = (struct arp*)(buf + ETH_HLEN);
@@ -98,6 +101,7 @@ int a_get_mac(const char* ifname, const uint32_t src_ip, const char src_mac[ETH_
 
         struct sockaddr_ll sll;
         sll.sll_family = AF_PACKET;
+        sll.sll_protocol = htons(ETH_P_ARP);
         sll.sll_ifindex = ifindex;
         bind(fd, (struct sockaddr*)&sll, sizeof(sll));
 
