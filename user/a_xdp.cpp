@@ -20,7 +20,8 @@
 #include <unordered_map>
 #include <algorithm>
 
-#include "xdp.h"
+#include "a_xdp.h"
+#include "a_arpget.h"
 
 #define TESTING_ENABLE_ASSERTIONS 1
 #include "syscall_macro.h"
@@ -38,6 +39,7 @@ struct xsk_queue {
     void* buffer;
     int fd;
     uint32_t queue = 0;
+    char ifname[IF_NAMESIZE];
     char smac[ETH_ALEN];
     uint32_t saddr = 0;
 };
@@ -167,6 +169,7 @@ int a_socket(const char* ifname, uint32_t queue) {
     SYSCALL(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, xsk.fd, &epoll_ev));
 
     xsk.queue = queue;
+    strncpy(xsk.ifname, ifname, sizeof(xsk.ifname));
 
     struct ifaddrs* ifaddr;
     SYSCALL(getifaddrs(&ifaddr));
@@ -227,12 +230,17 @@ int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
     return 0;
 }
 
-ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struct sockaddr* dest_addr, socklen_t addrlen, const char* dmac) {
+ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struct sockaddr* dest_addr, socklen_t addrlen) {
     if (dest_addr == nullptr || fd_to_xsk.count(sockfd) == 0) {
         return -1;
     }
 
     xsk_queue& xsk = fd_to_xsk[sockfd];
+
+    char dmac[ETH_ALEN] = {0};
+    if (a_get_mac(xsk.ifname, xsk.saddr, xsk.smac, ((sockaddr_in*)dest_addr)->sin_addr.s_addr, dmac) != 0) {
+        return -1;
+    }
 
     release_tx(xsk);
     static uint32_t next_frame = 0;
@@ -256,6 +264,7 @@ ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struc
     return -1;
 }
 
+// TODO: Respect flags DONTWAIT, try polling/commented code, check CPU utilization
 ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr* src_addr, socklen_t* addrlen) {
     if (fd_to_xsk.count(sockfd) == 0) {
         return -1;
@@ -263,10 +272,10 @@ ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr
 
     xsk_queue& xsk = fd_to_xsk[sockfd];
     for (;;) {
-//        SYSCALLIO(epoll_pwait2(epoll_fd, &epoll_ev, 1, NULL, NULL));
-//        struct pollfd fds = { xsk.fd, POLLIN };
-//        SYSCALLIO(poll(&fds, 1, -1));
-//        SYSCALLIO(recvfrom(xsk.fd, NULL, 0, MSG_DONTWAIT, NULL, NULL));
+        SYSCALLIO(epoll_pwait2(epoll_fd, &epoll_ev, 1, NULL, NULL));
+        // struct pollfd fds = { xsk.fd, POLLIN };
+        // SYSCALLIO(poll(&fds, 1, -1));
+        // SYSCALLIO(recvfrom(xsk.fd, NULL, 0, MSG_DONTWAIT, NULL, NULL));
         uint32_t idx;
         uint32_t n = xsk_ring_cons__peek(&xsk.rx, 1, &idx);
         if (n < 1) {
