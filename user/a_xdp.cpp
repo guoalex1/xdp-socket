@@ -232,7 +232,7 @@ int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
 
 ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struct sockaddr* dest_addr, socklen_t addrlen) {
     if (dest_addr == nullptr || fd_to_xsk.count(sockfd) == 0) {
-        return -1;
+        return sendto(sockfd, buf, len, flags, dest_addr, addrlen);
     }
 
     xsk_queue& xsk = fd_to_xsk[sockfd];
@@ -267,7 +267,7 @@ ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struc
 // TODO: Respect flags DONTWAIT, try polling/commented code, check CPU utilization
 ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr* src_addr, socklen_t* addrlen) {
     if (fd_to_xsk.count(sockfd) == 0) {
-        return -1;
+        return recvfrom(sockfd, buf, len, flags, src_addr, addrlen);
     }
 
     xsk_queue& xsk = fd_to_xsk[sockfd];

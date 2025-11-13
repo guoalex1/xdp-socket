@@ -90,7 +90,7 @@ int a_get_mac(const char* ifname, const uint32_t src_ip, const char src_mac[ETH_
 
     if (ifname_to_fd.count(ifname_str) == 0) {
         int fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
-        
+
         struct ifreq ifr;
         strncpy(ifr.ifr_name, ifname, IFNAMSIZ);
         ioctl(fd, SIOCGIFINDEX, &ifr);
