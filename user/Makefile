@@ -3,13 +3,20 @@ CXX = g++
 CXXFLAGS = -O3 -Wall -c -I$(XDP_INCLUDE)
 
 # Output
-OBJ = a_xdp.o
+LIBNAME = liba_xdp.a
+OBJS = a_xdp.o a_arpget.o
 SRC = a_xdp.cpp a_arpget.cpp
 
-all: $(OBJ)
+# Default target
+all: $(LIBNAME)
 
-$(OBJ): $(SRC)
-	$(CXX) $(CXXFLAGS) $^
+# Compile source files into object files
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
+# Archive into static library
+$(LIBNAME): $(OBJS)
+	ar rcs $@ $^
 
 clean:
-	rm -f $(OBJ)
+	rm -f $(OBJS) $(LIBNAME)
