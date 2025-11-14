@@ -1,17 +1,14 @@
-#include <arpa/inet.h>       // inet_ntop
 #include <ifaddrs.h>         // getifaddrs, freeifaddrs
+#include <linux/if_link.h>   // XDP_FLAGS_SKB_MODE
 #include <linux/if_packet.h> // struct sockaddr_ll
-#include <net/if.h>          // if_nametoindex
+#include <net/if.h>          // IF_NAMESIZE
 #include <netinet/if_ether.h>// struct ethhdr
 #include <netinet/ip.h>      // struct iphdr
 #include <netinet/udp.h>     // struct udphdr
 #include <poll.h>            // poll
-#include <sys/epoll.h>       // epoll
 #include <sys/mman.h>        // mmap
-#include <unistd.h>          // getopt, exit
 #include <xdp/xsk.h>
 #include <bpf/bpf.h>
-#include <linux/if_link.h>
 
 #include <cassert>
 #include <csignal>
@@ -45,9 +42,6 @@ struct xsk_queue {
 };
 
 static std::unordered_map<int, xsk_queue> fd_to_xsk = {};
-
-static int epoll_fd = -1;
-static struct epoll_event epoll_ev = {0};
 
 struct addressConfig {
     uint32_t ip;
@@ -163,11 +157,6 @@ int a_socket(const char* ifname, uint32_t queue) {
     }
     xsk_ring_prod__submit(&xsk.fill, QueueLength);
 
-    epoll_fd = SYSCALLIO(epoll_create1(EPOLL_CLOEXEC));
-    epoll_ev.events = EPOLLIN;
-    epoll_ev.data.fd = xsk.fd;
-    SYSCALL(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, xsk.fd, &epoll_ev));
-
     xsk.queue = queue;
     strncpy(xsk.ifname, ifname, sizeof(xsk.ifname));
 
@@ -264,55 +253,55 @@ ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struc
     return -1;
 }
 
-// TODO: Respect flags DONTWAIT, try polling/commented code, check CPU utilization
 ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr* src_addr, socklen_t* addrlen) {
     if (fd_to_xsk.count(sockfd) == 0) {
         return recvfrom(sockfd, buf, len, flags, src_addr, addrlen);
     }
 
     xsk_queue& xsk = fd_to_xsk[sockfd];
-    for (;;) {
-        SYSCALLIO(epoll_pwait2(epoll_fd, &epoll_ev, 1, NULL, NULL));
-        // struct pollfd fds = { xsk.fd, POLLIN };
-        // SYSCALLIO(poll(&fds, 1, -1));
-        // SYSCALLIO(recvfrom(xsk.fd, NULL, 0, MSG_DONTWAIT, NULL, NULL));
-        uint32_t idx;
-        uint32_t n = xsk_ring_cons__peek(&xsk.rx, 1, &idx);
-        if (n < 1) {
-            continue;
-        }
 
-        const struct xdp_desc* desc = xsk_ring_cons__rx_desc(&xsk.rx, idx);
-        uint64_t addr = xsk_umem__add_offset_to_addr(desc->addr);
-        void* data = xsk_umem__get_data(xsk.buffer, addr);
-        addr = xsk_umem__extract_addr(desc->addr);
-        xsk_ring_cons__release(&xsk.rx, 1);
-
-        // XDP filter guarantees IPv4 UDP packets
-        struct ethhdr* eth = (struct ethhdr*)data;
-        struct iphdr* iph = (struct iphdr*)(eth + 1);
-        struct udphdr* udph = (struct udphdr*)(iph + 1);
-        void* payload = (void*)(udph + 1);
-        size_t payload_len = desc->len - ((uint8_t*)payload - (uint8_t*)data);
-
-        int copy_size = std::min(len, payload_len);
-        memcpy(buf, payload, copy_size);
-
-        if (src_addr != nullptr && addrlen != nullptr && *addrlen >= sizeof(struct sockaddr_in)) {
-            struct sockaddr_in* sin = (struct sockaddr_in*)src_addr;
-            sin->sin_family = AF_INET;
-            sin->sin_addr.s_addr = iph->saddr;
-            sin->sin_port = udph->source;
-            *addrlen = sizeof(struct sockaddr_in);
-        }
-
-        if (xsk_ring_prod__reserve(&xsk.fill, 1, &idx) == 1) {
-            *xsk_ring_prod__fill_addr(&xsk.fill, idx) = addr;
-            xsk_ring_prod__submit(&xsk.fill, 1);
-        }
-
-        return copy_size;
+    if (!(flags & MSG_DONTWAIT)) {
+        struct pollfd fds = { xsk.fd, POLLIN };
+        SYSCALLIO(poll(&fds, 1, -1));
     }
+
+    uint32_t idx;
+    uint32_t n = xsk_ring_cons__peek(&xsk.rx, 1, &idx);
+    if (n < 1) {
+        errno = EAGAIN;
+        return -1;
+    }
+
+    const struct xdp_desc* desc = xsk_ring_cons__rx_desc(&xsk.rx, idx);
+    uint64_t addr = xsk_umem__add_offset_to_addr(desc->addr);
+    void* data = xsk_umem__get_data(xsk.buffer, addr);
+    addr = xsk_umem__extract_addr(desc->addr);
+    xsk_ring_cons__release(&xsk.rx, 1);
+
+    // XDP filter guarantees IPv4 UDP packets
+    struct ethhdr* eth = (struct ethhdr*)data;
+    struct iphdr* iph = (struct iphdr*)(eth + 1);
+    struct udphdr* udph = (struct udphdr*)(iph + 1);
+    void* payload = (void*)(udph + 1);
+    size_t payload_len = desc->len - ((uint8_t*)payload - (uint8_t*)data);
+
+    int copy_size = std::min(len, payload_len);
+    memcpy(buf, payload, copy_size);
+
+    if (src_addr != nullptr && addrlen != nullptr && *addrlen >= sizeof(struct sockaddr_in)) {
+        struct sockaddr_in* sin = (struct sockaddr_in*)src_addr;
+        sin->sin_family = AF_INET;
+        sin->sin_addr.s_addr = iph->saddr;
+        sin->sin_port = udph->source;
+        *addrlen = sizeof(struct sockaddr_in);
+    }
+
+    if (xsk_ring_prod__reserve(&xsk.fill, 1, &idx) == 1) {
+        *xsk_ring_prod__fill_addr(&xsk.fill, idx) = addr;
+        xsk_ring_prod__submit(&xsk.fill, 1);
+    }
+
+    return copy_size;
 }
 
 int a_close(int sockfd) {
