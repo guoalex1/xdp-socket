@@ -184,7 +184,7 @@ int a_socket(const char* ifname, uint32_t queue) {
 
 int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
     if (fd_to_xsk.count(sockfd) == 0) {
-        return -1;
+        return bind(sockfd, addr, addrlen);
     }
 
     xsk_queue& xsk = fd_to_xsk[sockfd];
