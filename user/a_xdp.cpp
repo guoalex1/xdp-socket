@@ -24,9 +24,6 @@
 #define TESTING_ENABLE_ASSERTIONS 1
 #include "syscall_macro.h"
 
-static const unsigned int QueueLength = 16;
-static const unsigned int BufferSize = XSK_UMEM__DEFAULT_FRAME_SIZE * QueueLength * 2;
-
 struct xsk_queue {
     struct xsk_ring_prod tx;
     struct xsk_ring_cons comp;
@@ -40,7 +37,9 @@ struct xsk_queue {
     char ifname[IF_NAMESIZE];
     char smac[ETH_ALEN];
     uint32_t saddr = 0;
-    int statusFlags = 0;
+    int status_flags = 0;
+    int queue_length = 16;
+    int buffer_size = 0;
 };
 
 static std::unordered_map<int, xsk_queue> fd_to_xsk = {};
@@ -80,7 +79,7 @@ static uint16_t checksum_fold(void* data, size_t len, uint32_t sum)
 
 static void release_tx(xsk_queue& xsk) {
     uint32_t idx = 0;
-    int completed = xsk_ring_cons__peek(&xsk.comp, QueueLength, &idx);
+    int completed = xsk_ring_cons__peek(&xsk.comp, xsk.queue_length, &idx);
     if (completed > 0) {
         xsk_ring_cons__release(&xsk.comp, completed);
     }
@@ -125,47 +124,51 @@ static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, const so
     return sizeof(*eth) + sizeof(*iph) + sizeof(*udph) + len;
 }
 
-int a_socket(const char* ifname, uint32_t queue) {
-    if (ifname == nullptr) {
-        return -1;
+int a_socket(int socket_family, int socket_type, int protocol, const struct a_socket_config* config) {
+    if (socket_family != AF_XDP || config == nullptr) {
+        return socket(socket_family, socket_type, protocol);
     }
 
     xsk_queue xsk{};
-    xsk.buffer = mmap(NULL, BufferSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    int buffer_size = XSK_UMEM__DEFAULT_FRAME_SIZE * config->queue_length * 2;
+    xsk.buffer = mmap(NULL, buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     assert(xsk.buffer != MAP_FAILED);
 
-    const struct xsk_umem_config ucfg = { .fill_size = QueueLength, .comp_size = QueueLength, .frame_size = XSK_UMEM__DEFAULT_FRAME_SIZE };
-    SYSCALL(xsk_umem__create(&xsk.umem, xsk.buffer, BufferSize, &xsk.fill, &xsk.comp, &ucfg));
 
-    const struct xsk_socket_config scfg = { .rx_size = QueueLength,
-                                            .tx_size = QueueLength,
+    const struct xsk_umem_config ucfg = { .fill_size = config->queue_length, .comp_size = config->queue_length, .frame_size = XSK_UMEM__DEFAULT_FRAME_SIZE };
+    SYSCALL(xsk_umem__create(&xsk.umem, xsk.buffer, buffer_size, &xsk.fill, &xsk.comp, &ucfg));
+
+    const struct xsk_socket_config scfg = { .rx_size = config->queue_length,
+                                            .tx_size = config->queue_length,
                                             .libbpf_flags = XSK_LIBXDP_FLAGS__INHIBIT_PROG_LOAD, // don't load default xdp program
-                                            .xdp_flags = XDP_FLAGS_SKB_MODE, // XDP_FLAGS_DRV_MODE
+                                            .xdp_flags = config->xdp_flags,
                                             .bind_flags = XDP_COPY | XDP_USE_NEED_WAKEUP }; // XDP_ZEROCOPY | XDP_USE_NEED_WAKEUP
-    SYSCALL(xsk_socket__create(&xsk.socket, ifname, queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
+    SYSCALL(xsk_socket__create(&xsk.socket, config->ifname, config->queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
     xsk.fd = xsk_socket__fd(xsk.socket);
 
     uint32_t idx;
-    uint32_t cnt = xsk_ring_prod__reserve(&xsk.fill, QueueLength, &idx);
-    if (idx != 0 || cnt != QueueLength) {
+    uint32_t cnt = xsk_ring_prod__reserve(&xsk.fill, config->queue_length, &idx);
+    if (idx != 0 || cnt != config->queue_length) {
         std::cerr << "ERROR: RX fill ring failed: " << cnt << ' ' << idx << std::endl;
         return -1;
     }
     // fill ring is second half of umem
-    uint64_t reladdr = XSK_UMEM__DEFAULT_FRAME_SIZE * QueueLength;
-    for (size_t i = 0; i < QueueLength; i += 1) {
+    uint64_t reladdr = XSK_UMEM__DEFAULT_FRAME_SIZE * config->queue_length;
+    for (size_t i = 0; i < config->queue_length; i += 1) {
         *xsk_ring_prod__fill_addr(&xsk.fill, i) = reladdr;
         reladdr += XSK_UMEM__DEFAULT_FRAME_SIZE;
     }
-    xsk_ring_prod__submit(&xsk.fill, QueueLength);
+    xsk_ring_prod__submit(&xsk.fill, config->queue_length);
 
-    xsk.queue = queue;
-    strncpy(xsk.ifname, ifname, sizeof(xsk.ifname));
+    xsk.queue = config->queue;
+    strncpy(xsk.ifname, config->ifname, sizeof(xsk.ifname));
+    xsk.queue_length = config->queue_length;
+    xsk.buffer_size = buffer_size;
 
     struct ifaddrs* ifaddr;
     SYSCALL(getifaddrs(&ifaddr));
     for (struct ifaddrs* ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
-        if (!strcmp(ifa->ifa_name, ifname) && ifa->ifa_addr) {
+        if (!strcmp(ifa->ifa_name, config->ifname) && ifa->ifa_addr) {
             if (ifa->ifa_addr->sa_family == AF_PACKET) {
                 struct sockaddr_ll* lladdr = (struct sockaddr_ll*)ifa->ifa_addr;
                 assert(lladdr->sll_halen == ETH_ALEN);
@@ -236,7 +239,7 @@ ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struc
     release_tx(xsk);
     static uint32_t next_frame = 0;
     const uint64_t frame_offset = next_frame * XSK_UMEM__DEFAULT_FRAME_SIZE;
-    next_frame = (next_frame + 1) % QueueLength;
+    next_frame = (next_frame + 1) % xsk.queue_length;
 
     void* data = xsk_umem__get_data(xsk.buffer, frame_offset);
 
@@ -262,7 +265,7 @@ ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr
 
     xsk_queue& xsk = fd_to_xsk[sockfd];
 
-    if (!((flags & MSG_DONTWAIT) || (xsk.statusFlags & O_NONBLOCK))) {
+    if (!((flags & MSG_DONTWAIT) || (xsk.status_flags & O_NONBLOCK))) {
         struct pollfd fds = { xsk.fd, POLLIN };
         SYSCALLIO(poll(&fds, 1, -1));
     }
@@ -322,7 +325,7 @@ int a_close(int fd) {
     }
 
     if (xsk.buffer) {
-        munmap(xsk.buffer, BufferSize);
+        munmap(xsk.buffer, xsk.buffer_size);
     }
 
     fd_to_xsk.erase(fd);
@@ -370,12 +373,12 @@ int a_fcntl(int fd, int cmd, ...) {
 
         switch (cmd) {
         case F_GETFL: {
-            result = xsk.statusFlags;
+            result = xsk.status_flags;
             break;
         }
         case F_SETFL: {
             int flags = va_arg(args, int);
-            xsk.statusFlags |= flags;
+            xsk.status_flags |= flags;
             result = 0;
             return flags;
         }

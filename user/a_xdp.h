@@ -4,7 +4,14 @@
 #include <sys/socket.h>
 #include <cstdint>
 
-int a_socket(const char* ifname, uint32_t queue);
+struct a_socket_config {
+    const char* ifname;
+    uint32_t queue;
+    uint16_t xdp_flags = 0;
+    uint32_t queue_length = 16;
+};
+
+int a_socket(int socket_family, int socket_type, int protocol, const struct a_socket_config* config);
 
 int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen);
 
