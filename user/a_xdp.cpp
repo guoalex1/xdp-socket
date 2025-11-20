@@ -37,6 +37,9 @@ struct xsk_queue {
     char ifname[IF_NAMESIZE];
     char smac[ETH_ALEN];
     uint32_t saddr = 0;
+    uint16_t sport = 0;
+    uint32_t daddr = 0;
+    uint16_t dport = 0;
     int status_flags = 0;
     int queue_length = 16;
     int buffer_size = 0;
@@ -87,7 +90,7 @@ static void release_tx(xsk_queue& xsk) {
 
 // Returns size
 // TODO: Add check for buf len
-static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, const sockaddr_in* addr, const char* smac, const char* dmac, uint32_t saddr) {
+static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, uint32_t daddr, uint16_t dport, const char* smac, const char* dmac, uint32_t saddr, uint16_t sport) {
     struct ethhdr* eth = (struct ethhdr*)data;
     struct iphdr*  iph = (struct iphdr*)(eth + 1);
     struct udphdr* udph = (struct udphdr*)(iph + 1);
@@ -99,8 +102,8 @@ static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, const so
     memcpy(eth->h_dest, dmac, ETH_ALEN);
     eth->h_proto = htons(ETH_P_IP);
 
-    udph->source = addr->sin_port;
-    udph->dest   = addr->sin_port;
+    udph->source = (sport == 0) ? dport : sport;
+    udph->dest   = dport;
     udph->len    = htons(sizeof(struct udphdr) + len);
 
     iph->version = 4;
@@ -108,7 +111,7 @@ static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, const so
     iph->protocol = IPPROTO_UDP;
     iph->tot_len = htons(sizeof(*iph) + sizeof(*udph) + len);
     iph->ttl = 64;
-    iph->daddr = addr->sin_addr.s_addr;
+    iph->daddr = daddr;
     iph->saddr = saddr;
     iph->check = checksum_fold(iph, sizeof(*iph), 0);
 
@@ -200,6 +203,7 @@ int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
         struct sockaddr_in* sin = (struct sockaddr_in*)addr;
         config.ip = xsk.saddr;
         config.port = sin->sin_port;
+        xsk.sport = sin->sin_port;
     } else {
         return -1;
     }
@@ -224,15 +228,30 @@ int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
     return 0;
 }
 
+int a_connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
+    if (fd_to_xsk.count(sockfd) == 0) {
+        return connect(sockfd, addr, addrlen);
+    }
+
+    xsk_queue& xsk = fd_to_xsk[sockfd];
+    xsk.daddr = ((sockaddr_in*)addr)->sin_addr.s_addr;
+    xsk.dport = ((sockaddr_in*)addr)->sin_port;
+
+    return 0;
+}
+
 ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struct sockaddr* dest_addr, socklen_t addrlen) {
-    if (dest_addr == nullptr || fd_to_xsk.count(sockfd) == 0) {
+    if (fd_to_xsk.count(sockfd) == 0) {
         return sendto(sockfd, buf, len, flags, dest_addr, addrlen);
     }
 
     xsk_queue& xsk = fd_to_xsk[sockfd];
 
+    uint32_t daddr = (dest_addr == nullptr) ? xsk.daddr : ((sockaddr_in*)dest_addr)->sin_addr.s_addr;
+    uint16_t dport = (dest_addr == nullptr) ? xsk.dport : ((sockaddr_in*)dest_addr)->sin_port;
+
     char dmac[ETH_ALEN] = {0};
-    if (a_get_mac(xsk.ifname, xsk.saddr, xsk.smac, ((sockaddr_in*)dest_addr)->sin_addr.s_addr, dmac) != 0) {
+    if (a_get_mac(xsk.ifname, xsk.saddr, xsk.smac, daddr, dmac) != 0) {
         return -1;
     }
 
@@ -243,7 +262,7 @@ ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struc
 
     void* data = xsk_umem__get_data(xsk.buffer, frame_offset);
 
-    const uint32_t frame_len = setup_ipv4_pkt(data, buf, len, (sockaddr_in*)dest_addr, xsk.smac, dmac, xsk.saddr);
+    const uint32_t frame_len = setup_ipv4_pkt(data, buf, len, daddr, dport, xsk.smac, dmac, xsk.saddr, xsk.sport);
 
     uint32_t idx;
     if (xsk_ring_prod__reserve(&xsk.tx, 1, &idx) == 1) {
