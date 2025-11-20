@@ -1,3 +1,6 @@
+#ifndef	A_XDP_H
+#define	A_XDP_H	1
+
 #include <sys/socket.h>
 #include <cstdint>
 
@@ -9,4 +12,8 @@ ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struc
 
 ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr* src_addr, socklen_t* addrlen);
 
-int a_close(int sockfd);
+int a_close(int fd);
+
+int a_fcntl(int fd, int cmd, ...);
+
+#endif

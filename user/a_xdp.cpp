@@ -9,6 +9,7 @@
 #include <sys/mman.h>        // mmap
 #include <xdp/xsk.h>
 #include <bpf/bpf.h>
+#include <fcntl.h>
 
 #include <cassert>
 #include <csignal>
@@ -39,6 +40,7 @@ struct xsk_queue {
     char ifname[IF_NAMESIZE];
     char smac[ETH_ALEN];
     uint32_t saddr = 0;
+    int statusFlags = 0;
 };
 
 static std::unordered_map<int, xsk_queue> fd_to_xsk = {};
@@ -260,7 +262,7 @@ ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr
 
     xsk_queue& xsk = fd_to_xsk[sockfd];
 
-    if (!(flags & MSG_DONTWAIT)) {
+    if (!((flags & MSG_DONTWAIT) || (xsk.statusFlags & O_NONBLOCK))) {
         struct pollfd fds = { xsk.fd, POLLIN };
         SYSCALLIO(poll(&fds, 1, -1));
     }
@@ -304,13 +306,12 @@ ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr
     return copy_size;
 }
 
-int a_close(int sockfd) {
-    if (fd_to_xsk.count(sockfd) == 0) {
-        errno = EBADF;
-        return -1;
+int a_close(int fd) {
+    if (fd_to_xsk.count(fd) == 0) {
+        return close(fd);
     }
 
-    xsk_queue& xsk = fd_to_xsk[sockfd];
+    xsk_queue& xsk = fd_to_xsk[fd];
 
     if (xsk.socket) {
         xsk_socket__delete(xsk.socket);
@@ -324,7 +325,68 @@ int a_close(int sockfd) {
         munmap(xsk.buffer, BufferSize);
     }
 
-    fd_to_xsk.erase(sockfd);
+    fd_to_xsk.erase(fd);
 
     return 0;
+}
+
+int a_fcntl(int fd, int cmd, ...) {
+    int result;
+    va_list args;
+    va_start(args, cmd);
+
+    if (fd_to_xsk.count(fd) == 0) {
+        switch (cmd) {
+            case F_GETFL:
+            case F_GETFD: {
+                result = fcntl(fd, cmd);
+                break;
+            }
+            case F_SETFL: {
+                int flags = va_arg(args, int);
+                result = fcntl(fd, cmd, flags);
+                break;
+            }
+            case F_DUPFD: {
+                int min_fd = va_arg(args, int);
+                result = fcntl(fd, cmd, min_fd);
+                break;
+            }
+            case F_SETLK:
+            case F_SETLKW:
+            case F_GETLK: {
+                struct flock* fl = va_arg(args, struct flock*);
+                result = fcntl(fd, cmd, fl);
+                break;
+            }
+            default: {
+                void* arg = va_arg(args, void*);
+                result = fcntl(fd, cmd, arg);
+                break;
+            }
+        }
+    } else {
+        xsk_queue& xsk = fd_to_xsk[fd];
+
+        switch (cmd) {
+        case F_GETFL: {
+            result = xsk.statusFlags;
+            break;
+        }
+        case F_SETFL: {
+            int flags = va_arg(args, int);
+            xsk.statusFlags |= flags;
+            result = 0;
+            return flags;
+        }
+        default: {
+            errno = EINVAL;
+            result = -1;
+            break;
+        }
+        }
+    }
+
+    va_end(args);
+    return result;
 }
