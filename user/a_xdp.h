@@ -25,4 +25,8 @@ int a_close(int fd);
 
 int a_fcntl(int fd, int cmd, ...);
 
+int a_getsockopt(int sockfd, int level, int optname, void* optval, socklen_t* optlen);
+
+int a_setsockopt(int sockfd, int level, int optname, const void* optval, socklen_t optlen);
+
 #endif

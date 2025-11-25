@@ -412,3 +412,19 @@ int a_fcntl(int fd, int cmd, ...) {
     va_end(args);
     return result;
 }
+
+int a_getsockopt(int sockfd, int level, int optname, void* optval, socklen_t* optlen) {
+    if (fd_to_xsk.count(sockfd) == 0) {
+        return getsockopt(sockfd, level, optname, optval, optlen);
+    }
+
+    return -1;
+}
+
+int a_setsockopt(int sockfd, int level, int optname, const void* optval, socklen_t optlen) {
+    if (fd_to_xsk.count(sockfd) == 0) {
+        return setsockopt(sockfd, level, optname, optval, optlen);
+    }
+
+    return -1;
+}
