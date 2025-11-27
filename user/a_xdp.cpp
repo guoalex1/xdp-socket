@@ -136,7 +136,7 @@ void a_init_config(struct a_socket_config* config) {
 }
 
 int a_socket(int socket_family, int socket_type, int protocol, const struct a_socket_config* config) {
-    if (socket_family != AF_XDP || config == nullptr) {
+    if (socket_type != SOCK_DGRAM || config == nullptr || config->ifname == nullptr) {
         return socket(socket_family, socket_type, protocol);
     }
 
