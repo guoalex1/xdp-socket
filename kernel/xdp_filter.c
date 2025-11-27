@@ -7,7 +7,13 @@
 
 #define DEFAULT_QUEUE_IDS 64
 
+#ifndef IPPROTO_UDP
 #define IPPROTO_UDP 17
+#endif
+
+#ifndef INADDR_ANY
+#define	INADDR_ANY ((__u32)0x00000000)
+#endif
 
 struct {
 	__uint(type, BPF_MAP_TYPE_XSKMAP);
@@ -71,7 +77,7 @@ int xdp_xsk_filter(struct xdp_md* ctx)
 
     bpf_printk("udph->dest: %d, cfg->port: %d\n", udph->dest, cfg->port);
 
-    if (iph->daddr != cfg->ip || udph->dest != cfg->port) {
+    if ((cfg->ip != INADDR_ANY && iph->daddr != cfg->ip) || udph->dest != cfg->port) {
         return XDP_PASS;
     }
 
