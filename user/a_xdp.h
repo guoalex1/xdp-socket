@@ -1,15 +1,22 @@
 #ifndef	A_XDP_H
 #define	A_XDP_H	1
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/socket.h>
-#include <cstdint>
+#include <stdint.h>
 
 struct a_socket_config {
     const char* ifname;
     uint32_t queue;
-    uint16_t xdp_flags = 0;
-    uint32_t queue_length = 16;
+    uint16_t xdp_flags;
+    uint32_t queue_length;
 };
+
+// Sets default values for xdp_flags and queue_length
+void a_init_config(struct a_socket_config* config);
 
 int a_socket(int socket_family, int socket_type, int protocol, const struct a_socket_config* config);
 
@@ -28,5 +35,9 @@ int a_fcntl(int fd, int cmd, ...);
 int a_getsockopt(int sockfd, int level, int optname, void* optval, socklen_t* optlen);
 
 int a_setsockopt(int sockfd, int level, int optname, const void* optval, socklen_t optlen);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

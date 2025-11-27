@@ -127,6 +127,14 @@ static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, uint32_t
     return sizeof(*eth) + sizeof(*iph) + sizeof(*udph) + len;
 }
 
+void a_init_config(struct a_socket_config* config) {
+    if (config != nullptr) {
+        config->queue = 0;
+        config->queue_length = 16;
+        config->xdp_flags = 0;
+    }
+}
+
 int a_socket(int socket_family, int socket_type, int protocol, const struct a_socket_config* config) {
     if (socket_family != AF_XDP || config == nullptr) {
         return socket(socket_family, socket_type, protocol);
