@@ -248,9 +248,9 @@ int a_connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
     return 0;
 }
 
-ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struct sockaddr* dest_addr, socklen_t addrlen) {
+ssize_t a_sendto(int sockfd, const void* buf, size_t size, int flags, const struct sockaddr* dest_addr, socklen_t addrlen) {
     if (fd_to_xsk.count(sockfd) == 0) {
-        return sendto(sockfd, buf, len, flags, dest_addr, addrlen);
+        return sendto(sockfd, buf, size, flags, dest_addr, addrlen);
     }
 
     xsk_queue& xsk = fd_to_xsk[sockfd];
@@ -270,24 +270,28 @@ ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struc
 
     void* data = xsk_umem__get_data(xsk.buffer, frame_offset);
 
-    const uint32_t frame_len = setup_ipv4_pkt(data, buf, len, daddr, dport, xsk.smac, dmac, xsk.saddr, xsk.sport);
+    const uint32_t frame_size = setup_ipv4_pkt(data, buf, size, daddr, dport, xsk.smac, dmac, xsk.saddr, xsk.sport);
 
     uint32_t idx;
     if (xsk_ring_prod__reserve(&xsk.tx, 1, &idx) == 1) {
         struct xdp_desc* tx_desc = xsk_ring_prod__tx_desc(&xsk.tx, idx);
         tx_desc->addr = frame_offset;
-        tx_desc->len  = frame_len;
+        tx_desc->len  = frame_size;
         xsk_ring_prod__submit(&xsk.tx, 1);
         SYSCALLIO(sendto(xsk.fd, nullptr, 0, MSG_DONTWAIT, nullptr, 0));
-        return len;
+        return size;
     }
 
     return -1;
 }
 
-ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr* src_addr, socklen_t* addrlen) {
+ssize_t a_send(int sockfd, const void* buf, size_t size, int flags) {
+    return a_sendto(sockfd, buf, size, flags, nullptr, 0);
+}
+
+ssize_t a_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockaddr* src_addr, socklen_t* addrlen) {
     if (fd_to_xsk.count(sockfd) == 0) {
-        return recvfrom(sockfd, buf, len, flags, src_addr, addrlen);
+        return recvfrom(sockfd, buf, size, flags, src_addr, addrlen);
     }
 
     xsk_queue& xsk = fd_to_xsk[sockfd];
@@ -315,9 +319,9 @@ ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr
     struct iphdr* iph = (struct iphdr*)(eth + 1);
     struct udphdr* udph = (struct udphdr*)(iph + 1);
     void* payload = (void*)(udph + 1);
-    size_t payload_len = desc->len - ((uint8_t*)payload - (uint8_t*)data);
+    size_t payload_size = desc->len - ((uint8_t*)payload - (uint8_t*)data);
 
-    int copy_size = std::min(len, payload_len);
+    int copy_size = std::min(size, payload_size);
     memcpy(buf, payload, copy_size);
 
     if (src_addr != nullptr && addrlen != nullptr && *addrlen >= sizeof(struct sockaddr_in)) {
@@ -334,6 +338,10 @@ ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr
     }
 
     return copy_size;
+}
+
+ssize_t a_recv(int sockfd, void* buf, size_t size, int flags) {
+    return a_recvfrom(sockfd, buf, size, flags, nullptr, nullptr);
 }
 
 int a_close(int fd) {

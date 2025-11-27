@@ -24,9 +24,13 @@ int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen);
 
 int a_connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen);
 
-ssize_t a_sendto(int sockfd, const void* buf, size_t len, int flags, const struct sockaddr* dest_addr, socklen_t addrlen);
+ssize_t a_sendto(int sockfd, const void* buf, size_t size, int flags, const struct sockaddr* dest_addr, socklen_t addrlen);
 
-ssize_t a_recvfrom(int sockfd, void* buf, size_t len, int flags, struct sockaddr* src_addr, socklen_t* addrlen);
+ssize_t a_send(int sockfd, const void* buf, size_t size, int flags);
+
+ssize_t a_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockaddr* src_addr, socklen_t* addrlen);
+
+ssize_t a_recv(int sockfd, void* buf, size_t size, int flags);
 
 int a_close(int fd);
 
