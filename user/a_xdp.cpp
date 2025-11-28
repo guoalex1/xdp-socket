@@ -209,7 +209,7 @@ int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
 
     if (addr->sa_family == AF_INET && addrlen >= sizeof(struct sockaddr_in)) {
         struct sockaddr_in* sin = (struct sockaddr_in*)addr;
-        config.ip = xsk.saddr;
+        config.ip = sin->sin_addr.s_addr;
         config.port = sin->sin_port;
         xsk.sport = sin->sin_port;
     } else {
