@@ -89,12 +89,11 @@ static void release_tx(xsk_queue& xsk) {
 }
 
 // Returns size
-// TODO: Add check for buf len
 static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, uint32_t daddr, uint16_t dport, const char* smac, const char* dmac, uint32_t saddr, uint16_t sport) {
     struct ethhdr* eth = (struct ethhdr*)data;
-    struct iphdr*  iph = (struct iphdr*)(eth + 1);
+    struct iphdr* iph = (struct iphdr*)(eth + 1);
     struct udphdr* udph = (struct udphdr*)(iph + 1);
-    char* payload       = (char*)(udph + 1);
+    char* payload = (char*)(udph + 1);
 
     memcpy(payload, buf, len);
 
@@ -103,8 +102,8 @@ static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, uint32_t
     eth->h_proto = htons(ETH_P_IP);
 
     udph->source = (sport == 0) ? dport : sport;
-    udph->dest   = dport;
-    udph->len    = htons(sizeof(struct udphdr) + len);
+    udph->dest = dport;
+    udph->len = htons(sizeof(struct udphdr) + len);
 
     iph->version = 4;
     iph->ihl = 5;
@@ -253,6 +252,11 @@ ssize_t a_sendto(int sockfd, const void* buf, size_t size, int flags, const stru
         return sendto(sockfd, buf, size, flags, dest_addr, addrlen);
     }
 
+    if (sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr) + size > XSK_UMEM__DEFAULT_FRAME_SIZE) {
+        errno = EMSGSIZE;
+        return -1;
+    }
+
     xsk_queue& xsk = fd_to_xsk[sockfd];
 
     uint32_t daddr = (dest_addr == nullptr) ? xsk.daddr : ((sockaddr_in*)dest_addr)->sin_addr.s_addr;
@@ -276,7 +280,7 @@ ssize_t a_sendto(int sockfd, const void* buf, size_t size, int flags, const stru
     if (xsk_ring_prod__reserve(&xsk.tx, 1, &idx) == 1) {
         struct xdp_desc* tx_desc = xsk_ring_prod__tx_desc(&xsk.tx, idx);
         tx_desc->addr = frame_offset;
-        tx_desc->len  = frame_size;
+        tx_desc->len = frame_size;
         xsk_ring_prod__submit(&xsk.tx, 1);
         SYSCALLIO(sendto(xsk.fd, nullptr, 0, MSG_DONTWAIT, nullptr, 0));
         return size;
