@@ -7,24 +7,24 @@
 
 #define MAP_ENTRIES 1024
 
-template <typename T> struct Entry {
+template <typename T> struct uint_map_entry {
     uint32_t key;
     T value;
-    struct Entry<T>* next;
+    struct uint_map_entry<T>* next;
 };
 
-template <typename T> struct UIntMap {
-    Entry<T>* buckets[MAP_ENTRIES];
+template <typename T> struct uint_map {
+    uint_map_entry<T>* buckets[MAP_ENTRIES];
 };
 
-template <typename T> bool map_insert_or_assign(UIntMap<T>* map, uint32_t key, T* value) {
+template <typename T> bool map_insert_or_assign(uint_map<T>* map, uint32_t key, T* value) {
     if (value == NULL) {
         return false;
     }
 
     size_t index = key % MAP_ENTRIES;
 
-    Entry<T>* current = map->buckets[index];
+    uint_map_entry<T>* current = map->buckets[index];
     while (current != NULL) {
         if (current->key == key) {
             current->value = *value;
@@ -33,7 +33,7 @@ template <typename T> bool map_insert_or_assign(UIntMap<T>* map, uint32_t key, T
         current = current->next;
     }
 
-    Entry<T>* node = (Entry<T>*)malloc(sizeof(Entry<T>));
+    uint_map_entry<T>* node = (uint_map_entry<T>*)malloc(sizeof(uint_map_entry<T>));
     if (node == NULL) {
         return false;
     }
@@ -46,9 +46,9 @@ template <typename T> bool map_insert_or_assign(UIntMap<T>* map, uint32_t key, T
     return true;
 }
 
-template <typename T> T* map_find(UIntMap<T>* map, uint32_t key) {
+template <typename T> T* map_find(uint_map<T>* map, uint32_t key) {
     size_t index = key % MAP_ENTRIES;
-    Entry<T>* current = map->buckets[index];
+    uint_map_entry<T>* current = map->buckets[index];
 
     while (current) {
         if (current->key == key) {
@@ -61,10 +61,10 @@ template <typename T> T* map_find(UIntMap<T>* map, uint32_t key) {
     return NULL;
 }
 
-template <typename T> void map_erase(UIntMap<T>* map, uint32_t key) {
+template <typename T> void map_erase(uint_map<T>* map, uint32_t key) {
     size_t index = key % MAP_ENTRIES;
-    Entry<T>* current = map->buckets[index];
-    Entry<T>* prev = NULL;
+    uint_map_entry<T>* current = map->buckets[index];
+    uint_map_entry<T>* prev = NULL;
 
     while (current != NULL) {
         if (current->key == key) {

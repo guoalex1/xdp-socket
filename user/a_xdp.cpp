@@ -15,7 +15,6 @@
 #include <csignal>
 #include <cstring>
 #include <iostream>
-#include <unordered_map>
 #include <algorithm>
 
 #include "a_xdp.h"
@@ -46,9 +45,9 @@ struct xsk_queue {
     int buffer_size = 0;
 };
 
-static UIntMap<xsk_queue> fd_to_xsk = {};
+static uint_map<xsk_queue> fd_to_xsk = {};
 
-struct addressConfig {
+struct filter_addr_config {
     uint32_t ip;
     uint16_t port;
 };
@@ -205,7 +204,7 @@ int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
         return bind(sockfd, addr, addrlen);
     }
 
-    struct addressConfig config{};
+    struct filter_addr_config config{};
 
     if (addr->sa_family == AF_INET && addrlen >= sizeof(struct sockaddr_in)) {
         struct sockaddr_in* sin = (struct sockaddr_in*)addr;
