@@ -18,24 +18,28 @@ template <typename T> struct UIntMap {
 };
 
 template <typename T> bool map_insert_or_assign(UIntMap<T>* map, uint32_t key, T* value) {
+    if (value == NULL) {
+        return false;
+    }
+
     size_t index = key % MAP_ENTRIES;
 
     Entry<T>* current = map->buckets[index];
     while (current != NULL) {
         if (current->key == key) {
-            current->value = value;
+            current->value = *value;
             return true;
         }
         current = current->next;
     }
 
-    Entry<T>* node = malloc(sizeof(Entry<T>));
+    Entry<T>* node = (Entry<T>*)malloc(sizeof(Entry<T>));
     if (node == NULL) {
         return false;
     }
 
     node->key = key;
-    node->value = value;
+    node->value = *value;
     node->next = map->buckets[index];
     map->buckets[index] = node;
 

@@ -20,6 +20,7 @@
 
 #include "a_xdp.h"
 #include "a_arpget.h"
+#include "uint_map.h"
 
 #define TESTING_ENABLE_ASSERTIONS 1
 #include "syscall_macro.h"
@@ -45,7 +46,7 @@ struct xsk_queue {
     int buffer_size = 0;
 };
 
-static std::unordered_map<int, xsk_queue> fd_to_xsk = {};
+static UIntMap<xsk_queue> fd_to_xsk = {};
 
 struct addressConfig {
     uint32_t ip;
@@ -80,11 +81,11 @@ static uint16_t checksum_fold(void* data, size_t len, uint32_t sum)
 	return ~sum;
 }
 
-static void release_tx(xsk_queue& xsk) {
+static void release_tx(xsk_queue* xsk) {
     uint32_t idx = 0;
-    int completed = xsk_ring_cons__peek(&xsk.comp, xsk.queue_length, &idx);
+    int completed = xsk_ring_cons__peek(&xsk->comp, xsk->queue_length, &idx);
     if (completed > 0) {
-        xsk_ring_cons__release(&xsk.comp, completed);
+        xsk_ring_cons__release(&xsk->comp, completed);
     }
 }
 
@@ -193,16 +194,16 @@ int a_socket(int socket_family, int socket_type, int protocol, const struct a_so
 
     freeifaddrs(ifaddr);
 
-    fd_to_xsk[xsk.fd] = xsk;
+    map_insert_or_assign(&fd_to_xsk, xsk.fd, &xsk);
     return xsk.fd;
 }
 
 int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
-    if (fd_to_xsk.count(sockfd) == 0) {
+    xsk_queue* xsk = map_find(&fd_to_xsk, sockfd);
+
+    if (xsk == NULL) {
         return bind(sockfd, addr, addrlen);
     }
-
-    xsk_queue& xsk = fd_to_xsk[sockfd];
 
     struct addressConfig config{};
 
@@ -210,15 +211,15 @@ int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
         struct sockaddr_in* sin = (struct sockaddr_in*)addr;
         config.ip = sin->sin_addr.s_addr;
         config.port = sin->sin_port;
-        xsk.sport = sin->sin_port;
+        xsk->sport = sin->sin_port;
     } else {
         return -1;
     }
 
     // xsks_map
     int map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsks_map");
-    int sock_fd = xsk_socket__fd(xsk.socket);
-    bpf_map_update_elem(map_fd, &xsk.queue, &sock_fd, BPF_ANY);
+    int sock_fd = xsk_socket__fd(xsk->socket);
+    bpf_map_update_elem(map_fd, &xsk->queue, &sock_fd, BPF_ANY);
 
     // config_map
     int config_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/config_map");
@@ -236,19 +237,22 @@ int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
 }
 
 int a_connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
-    if (fd_to_xsk.count(sockfd) == 0) {
+    xsk_queue* xsk = map_find(&fd_to_xsk, sockfd);
+
+    if (xsk == NULL) {
         return connect(sockfd, addr, addrlen);
     }
 
-    xsk_queue& xsk = fd_to_xsk[sockfd];
-    xsk.daddr = ((sockaddr_in*)addr)->sin_addr.s_addr;
-    xsk.dport = ((sockaddr_in*)addr)->sin_port;
+    xsk->daddr = ((sockaddr_in*)addr)->sin_addr.s_addr;
+    xsk->dport = ((sockaddr_in*)addr)->sin_port;
 
     return 0;
 }
 
 ssize_t a_sendto(int sockfd, const void* buf, size_t size, int flags, const struct sockaddr* dest_addr, socklen_t addrlen) {
-    if (fd_to_xsk.count(sockfd) == 0) {
+    xsk_queue* xsk = map_find(&fd_to_xsk, sockfd);
+
+    if (xsk == NULL) {
         return sendto(sockfd, buf, size, flags, dest_addr, addrlen);
     }
 
@@ -257,32 +261,30 @@ ssize_t a_sendto(int sockfd, const void* buf, size_t size, int flags, const stru
         return -1;
     }
 
-    xsk_queue& xsk = fd_to_xsk[sockfd];
-
-    uint32_t daddr = (dest_addr == nullptr) ? xsk.daddr : ((sockaddr_in*)dest_addr)->sin_addr.s_addr;
-    uint16_t dport = (dest_addr == nullptr) ? xsk.dport : ((sockaddr_in*)dest_addr)->sin_port;
+    uint32_t daddr = (dest_addr == nullptr) ? xsk->daddr : ((sockaddr_in*)dest_addr)->sin_addr.s_addr;
+    uint16_t dport = (dest_addr == nullptr) ? xsk->dport : ((sockaddr_in*)dest_addr)->sin_port;
 
     char dmac[ETH_ALEN] = {0};
-    if (a_get_mac(xsk.ifname, xsk.saddr, xsk.smac, daddr, dmac) != 0) {
+    if (a_get_mac(xsk->ifname, xsk->saddr, xsk->smac, daddr, dmac) != 0) {
         return -1;
     }
 
     release_tx(xsk);
     static uint32_t next_frame = 0;
     const uint64_t frame_offset = next_frame * XSK_UMEM__DEFAULT_FRAME_SIZE;
-    next_frame = (next_frame + 1) % xsk.queue_length;
+    next_frame = (next_frame + 1) % xsk->queue_length;
 
-    void* data = xsk_umem__get_data(xsk.buffer, frame_offset);
+    void* data = xsk_umem__get_data(xsk->buffer, frame_offset);
 
-    const uint32_t frame_size = setup_ipv4_pkt(data, buf, size, daddr, dport, xsk.smac, dmac, xsk.saddr, xsk.sport);
+    const uint32_t frame_size = setup_ipv4_pkt(data, buf, size, daddr, dport, xsk->smac, dmac, xsk->saddr, xsk->sport);
 
     uint32_t idx;
-    if (xsk_ring_prod__reserve(&xsk.tx, 1, &idx) == 1) {
-        struct xdp_desc* tx_desc = xsk_ring_prod__tx_desc(&xsk.tx, idx);
+    if (xsk_ring_prod__reserve(&xsk->tx, 1, &idx) == 1) {
+        struct xdp_desc* tx_desc = xsk_ring_prod__tx_desc(&xsk->tx, idx);
         tx_desc->addr = frame_offset;
         tx_desc->len = frame_size;
-        xsk_ring_prod__submit(&xsk.tx, 1);
-        SYSCALLIO(sendto(xsk.fd, nullptr, 0, MSG_DONTWAIT, nullptr, 0));
+        xsk_ring_prod__submit(&xsk->tx, 1);
+        SYSCALLIO(sendto(xsk->fd, nullptr, 0, MSG_DONTWAIT, nullptr, 0));
         return size;
     }
 
@@ -294,29 +296,29 @@ ssize_t a_send(int sockfd, const void* buf, size_t size, int flags) {
 }
 
 ssize_t a_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockaddr* src_addr, socklen_t* addrlen) {
-    if (fd_to_xsk.count(sockfd) == 0) {
+    xsk_queue* xsk = map_find(&fd_to_xsk, sockfd);
+
+    if (xsk == NULL) {
         return recvfrom(sockfd, buf, size, flags, src_addr, addrlen);
     }
 
-    xsk_queue& xsk = fd_to_xsk[sockfd];
-
-    if (!((flags & MSG_DONTWAIT) || (xsk.status_flags & O_NONBLOCK))) {
-        struct pollfd fds = { xsk.fd, POLLIN };
+    if (!((flags & MSG_DONTWAIT) || (xsk->status_flags & O_NONBLOCK))) {
+        struct pollfd fds = { xsk->fd, POLLIN };
         SYSCALLIO(poll(&fds, 1, -1));
     }
 
     uint32_t idx;
-    uint32_t n = xsk_ring_cons__peek(&xsk.rx, 1, &idx);
+    uint32_t n = xsk_ring_cons__peek(&xsk->rx, 1, &idx);
     if (n < 1) {
         errno = EAGAIN;
         return -1;
     }
 
-    const struct xdp_desc* desc = xsk_ring_cons__rx_desc(&xsk.rx, idx);
+    const struct xdp_desc* desc = xsk_ring_cons__rx_desc(&xsk->rx, idx);
     uint64_t addr = xsk_umem__add_offset_to_addr(desc->addr);
-    void* data = xsk_umem__get_data(xsk.buffer, addr);
+    void* data = xsk_umem__get_data(xsk->buffer, addr);
     addr = xsk_umem__extract_addr(desc->addr);
-    xsk_ring_cons__release(&xsk.rx, 1);
+    xsk_ring_cons__release(&xsk->rx, 1);
 
     // XDP filter guarantees IPv4 UDP packets
     struct ethhdr* eth = (struct ethhdr*)data;
@@ -336,9 +338,9 @@ ssize_t a_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockadd
         *addrlen = sizeof(struct sockaddr_in);
     }
 
-    if (xsk_ring_prod__reserve(&xsk.fill, 1, &idx) == 1) {
-        *xsk_ring_prod__fill_addr(&xsk.fill, idx) = addr;
-        xsk_ring_prod__submit(&xsk.fill, 1);
+    if (xsk_ring_prod__reserve(&xsk->fill, 1, &idx) == 1) {
+        *xsk_ring_prod__fill_addr(&xsk->fill, idx) = addr;
+        xsk_ring_prod__submit(&xsk->fill, 1);
     }
 
     return copy_size;
@@ -349,25 +351,25 @@ ssize_t a_recv(int sockfd, void* buf, size_t size, int flags) {
 }
 
 int a_close(int fd) {
-    if (fd_to_xsk.count(fd) == 0) {
+    xsk_queue* xsk = map_find(&fd_to_xsk, fd);
+
+    if (xsk == NULL) {
         return close(fd);
     }
 
-    xsk_queue& xsk = fd_to_xsk[fd];
-
-    if (xsk.socket) {
-        xsk_socket__delete(xsk.socket);
+    if (xsk->socket != NULL) {
+        xsk_socket__delete(xsk->socket);
     }
 
-    if (xsk.umem) {
-        xsk_umem__delete(xsk.umem);
+    if (xsk->umem != NULL) {
+        xsk_umem__delete(xsk->umem);
     }
 
-    if (xsk.buffer) {
-        munmap(xsk.buffer, xsk.buffer_size);
+    if (xsk->buffer != NULL) {
+        munmap(xsk->buffer, xsk->buffer_size);
     }
 
-    fd_to_xsk.erase(fd);
+    map_erase(&fd_to_xsk, fd);
 
     return 0;
 }
@@ -377,7 +379,9 @@ int a_fcntl(int fd, int cmd, ...) {
     va_list args;
     va_start(args, cmd);
 
-    if (fd_to_xsk.count(fd) == 0) {
+    xsk_queue* xsk = map_find(&fd_to_xsk, fd);
+
+    if (xsk == NULL) {
         switch (cmd) {
             case F_GETFL:
             case F_GETFD: {
@@ -408,16 +412,14 @@ int a_fcntl(int fd, int cmd, ...) {
             }
         }
     } else {
-        xsk_queue& xsk = fd_to_xsk[fd];
-
         switch (cmd) {
         case F_GETFL: {
-            result = xsk.status_flags;
+            result = xsk->status_flags;
             break;
         }
         case F_SETFL: {
             int flags = va_arg(args, int);
-            xsk.status_flags |= flags;
+            xsk->status_flags |= flags;
             result = 0;
             return flags;
         }
@@ -434,7 +436,7 @@ int a_fcntl(int fd, int cmd, ...) {
 }
 
 int a_getsockopt(int sockfd, int level, int optname, void* optval, socklen_t* optlen) {
-    if (fd_to_xsk.count(sockfd) == 0) {
+    if (map_find(&fd_to_xsk, sockfd) == NULL) {
         return getsockopt(sockfd, level, optname, optval, optlen);
     }
 
@@ -442,7 +444,7 @@ int a_getsockopt(int sockfd, int level, int optname, void* optval, socklen_t* op
 }
 
 int a_setsockopt(int sockfd, int level, int optname, const void* optval, socklen_t optlen) {
-    if (fd_to_xsk.count(sockfd) == 0) {
+    if (map_find(&fd_to_xsk, sockfd) == NULL) {
         return setsockopt(sockfd, level, optname, optval, optlen);
     }
 
