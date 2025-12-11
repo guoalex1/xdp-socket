@@ -6,27 +6,23 @@
 #include <linux/if_packet.h>
 #include <linux/if_ether.h>
 #include <linux/if_arp.h>
-
-#include <unordered_map>
-#include <string>
-#include <array>
+#include <stdio.h>
 
 #include "a_arpget.h"
+#include "uint_map.h"
 
 #define IPV4_ALEN 4
 
-static std::unordered_map<std::string, int> ifname_to_fd;
-
-static std::unordered_map<uint32_t, std::array<char, ETH_ALEN>> arp_table;
+static uint_map<char[ETH_ALEN]> arp_table;
 
 struct arp {
     unsigned short hw_type;
     unsigned short proto_type;
-    unsigned char  hw_len;
-    unsigned char  proto_len;
+    unsigned char hw_len;
+    unsigned char proto_len;
     unsigned short opcode;
-    char sender_mac[ETH_ALEN];
-    char sender_ip[IPV4_ALEN];
+    char src_mac[ETH_ALEN];
+    char src_ip[IPV4_ALEN];
     char target_mac[ETH_ALEN];
     char target_ip[IPV4_ALEN];
 };
@@ -52,14 +48,14 @@ static int arp_exchange(int fd, const char src_mac[ETH_ALEN], uint32_t src_ip, u
     arp->proto_len = IPV4_ALEN;
     arp->opcode = htons(ARPOP_REQUEST);
 
-    memcpy(arp->sender_mac, src_mac, ETH_ALEN);
-    memcpy(arp->sender_ip, &src_ip, IPV4_ALEN);
+    memcpy(arp->src_mac, src_mac, ETH_ALEN);
+    memcpy(arp->src_ip, &src_ip, IPV4_ALEN);
     memset(arp->target_mac, 0, ETH_ALEN);
     memcpy(arp->target_ip, &dst_ip, IPV4_ALEN);
 
     // Send request
     if (send(fd, packet, sizeof(packet), 0) < 0) {
-        perror("send");
+        fprintf(stderr, "Error sending ARP request\n");
         return -1;
     }
 
@@ -75,45 +71,39 @@ static int arp_exchange(int fd, const char src_mac[ETH_ALEN], uint32_t src_ip, u
         struct ethhdr* reth = (struct ethhdr*)buf;
         struct arp* rarp = (struct arp*)(buf + ETH_HLEN);
 
-        if (ntohs(reth->h_proto) == ETH_P_ARP && ntohs(rarp->opcode) == ARPOP_REPLY && memcmp(rarp->sender_ip, &dst_ip, IPV4_ALEN) == 0)
-        {
-            memcpy(out_mac, rarp->sender_mac, ETH_ALEN);
+        if (ntohs(reth->h_proto) == ETH_P_ARP && ntohs(rarp->opcode) == ARPOP_REPLY && memcmp(rarp->src_ip, &dst_ip, IPV4_ALEN) == 0) {
+            memcpy(out_mac, rarp->src_mac, ETH_ALEN);
             return 0;
         }
     }
 }
 
-int a_get_mac(const char* ifname, const uint32_t src_ip, const char src_mac[ETH_ALEN], const uint32_t dst_ip, char dst_mac[ETH_ALEN]) {
-    if (arp_table.count(dst_ip) > 0) {
-        memcpy(dst_mac, arp_table[dst_ip].data(), arp_table[dst_ip].size());
+int a_get_mac(const char* ifname, const uint32_t src_ip, const char src_mac[ETH_ALEN], const uint32_t dst_ip, char dst_mac[ETH_ALEN])
+{
+    char (*mac)[ETH_ALEN] = map_find(&arp_table, dst_ip);
+
+    if (mac != NULL) {
+        memcpy(dst_mac, *mac, sizeof(*mac));
         return 0;
     }
 
-    std::string ifname_str{ifname};
+    int sockfd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
 
-    if (ifname_to_fd.count(ifname_str) == 0) {
-        int fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
+    struct ifreq ifr;
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ);
+    ioctl(sockfd, SIOCGIFINDEX, &ifr);
+    int ifindex = ifr.ifr_ifindex;
 
-        struct ifreq ifr;
-        strncpy(ifr.ifr_name, ifname, IFNAMSIZ);
-        ioctl(fd, SIOCGIFINDEX, &ifr);
-        int ifindex = ifr.ifr_ifindex;
+    struct sockaddr_ll sll;
+    sll.sll_family = AF_PACKET;
+    sll.sll_protocol = htons(ETH_P_ARP);
+    sll.sll_ifindex = ifindex;
+    bind(sockfd, (struct sockaddr*)&sll, sizeof(sll));
 
-        struct sockaddr_ll sll;
-        sll.sll_family = AF_PACKET;
-        sll.sll_protocol = htons(ETH_P_ARP);
-        sll.sll_ifindex = ifindex;
-        bind(fd, (struct sockaddr*)&sll, sizeof(sll));
-
-        ifname_to_fd[ifname_str] = fd;
-    }
-
-    int sockfd = ifname_to_fd[ifname_str];
     int ret = arp_exchange(sockfd, src_mac, src_ip, dst_ip, dst_mac);
 
     if (ret == 0) {
-        arp_table[dst_ip] = std::array<char, ETH_ALEN>();
-        memcpy(arp_table[dst_ip].data(), dst_mac, ETH_ALEN);
+        map_insert_or_assign(&arp_table, dst_ip, (char(*)[ETH_ALEN])dst_mac);
     }
 
     return ret;
