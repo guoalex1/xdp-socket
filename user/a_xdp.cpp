@@ -7,15 +7,11 @@
 #include <netinet/udp.h>     // struct udphdr
 #include <poll.h>            // poll
 #include <sys/mman.h>        // mmap
+#include <assert.h>
+#include <unistd.h>
 #include <xdp/xsk.h>
 #include <bpf/bpf.h>
 #include <fcntl.h>
-
-#include <cassert>
-#include <csignal>
-#include <cstring>
-#include <iostream>
-#include <algorithm>
 
 #include "a_xdp.h"
 #include "a_arpget.h"
@@ -159,7 +155,7 @@ int a_socket(int socket_family, int socket_type, int protocol, const struct a_so
     uint32_t idx;
     uint32_t cnt = xsk_ring_prod__reserve(&xsk.fill, config->queue_length, &idx);
     if (idx != 0 || cnt != config->queue_length) {
-        std::cerr << "ERROR: RX fill ring failed: " << cnt << ' ' << idx << std::endl;
+        fprintf(stderr, "ERROR: RX fill ring failed: %u %u\n", cnt, idx);
         return -1;
     }
     // fill ring is second half of umem
@@ -223,12 +219,12 @@ int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
     // config_map
     int config_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/config_map");
     if (config_fd < 0) {
-        std::cerr << "Error getting config_map" << std::endl;
+        fprintf(stderr, "Error getting config_map: verify xdp program is loaded correctly\n");
         return -1;
     }
 
     if (bpf_map_update_elem(config_fd, &configKey, &config, BPF_ANY) < 0) {
-        std::cerr << "bpf_map_update_elem config_map" << std::endl;
+        fprintf(stderr, "bpf_map_update_elem error: verify xdp program is loaded correctly\n");
         return -1;
     }
 
@@ -326,7 +322,7 @@ ssize_t a_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockadd
     void* payload = (void*)(udph + 1);
     size_t payload_size = desc->len - ((uint8_t*)payload - (uint8_t*)data);
 
-    int copy_size = std::min(size, payload_size);
+    int copy_size = size < payload_size ? size : payload_size;
     memcpy(buf, payload, copy_size);
 
     if (src_addr != nullptr && addrlen != nullptr && *addrlen >= sizeof(struct sockaddr_in)) {
