@@ -27,7 +27,7 @@ template <typename T> bool map_insert_or_assign(uint_map<T>* map, uint32_t key, 
     uint_map_entry<T>* current = map->buckets[index];
     while (current != NULL) {
         if (current->key == key) {
-            current->value = *value;
+            memcpy(&current->value, value, sizeof(T));
             return true;
         }
         current = current->next;
@@ -39,7 +39,7 @@ template <typename T> bool map_insert_or_assign(uint_map<T>* map, uint32_t key, 
     }
 
     node->key = key;
-    node->value = *value;
+    memcpy(&node->value, value, sizeof(T));
     node->next = map->buckets[index];
     map->buckets[index] = node;
 
