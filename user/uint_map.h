@@ -1,5 +1,5 @@
 #ifndef UINT_MAP_H
-#define UINT_MAP_H
+#define UINT_MAP_H 1
 
 #include <stdint.h>
 #include <stdlib.h>

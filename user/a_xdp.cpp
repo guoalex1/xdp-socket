@@ -12,6 +12,7 @@
 #include <xdp/xsk.h>
 #include <bpf/bpf.h>
 #include <fcntl.h>
+#include <arpa/inet.h>
 
 #include "a_xdp.h"
 #include "a_arpget.h"
@@ -131,25 +132,60 @@ void a_init_config(struct a_socket_config* config) {
 }
 
 int a_socket(int socket_family, int socket_type, int protocol, const struct a_socket_config* config) {
-    if (socket_type != SOCK_DGRAM || config == nullptr || config->ifname == nullptr) {
+    if (socket_type != SOCK_DGRAM || config == nullptr || config->iface_ip == nullptr) {
         return socket(socket_family, socket_type, protocol);
     }
 
     xsk_queue xsk{};
+
+    if (inet_pton(AF_INET, config->iface_ip, &xsk.saddr) != 1) {
+        fprintf(stderr, "Invalid IP address format: %s\n", config->iface_ip);
+        return -1;
+    }
+
     int buffer_size = XSK_UMEM__DEFAULT_FRAME_SIZE * config->queue_length * 2;
     xsk.buffer = mmap(NULL, buffer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     assert(xsk.buffer != MAP_FAILED);
 
-
     const struct xsk_umem_config ucfg = { .fill_size = config->queue_length, .comp_size = config->queue_length, .frame_size = XSK_UMEM__DEFAULT_FRAME_SIZE };
     SYSCALL(xsk_umem__create(&xsk.umem, xsk.buffer, buffer_size, &xsk.fill, &xsk.comp, &ucfg));
+
+    struct ifaddrs* ifaddr;
+    SYSCALL(getifaddrs(&ifaddr));
+
+    bool ifname_found = false;
+    // Get ifname from ip
+    for (struct ifaddrs* ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr != NULL && ifa->ifa_addr->sa_family == AF_INET && xsk.saddr == ((struct sockaddr_in*)ifa->ifa_addr)->sin_addr.s_addr) {
+            strncpy(xsk.ifname, ifa->ifa_name, IF_NAMESIZE);
+            ifname_found = true;
+            break;
+        }
+    }
+
+    if (!ifname_found) {
+        fprintf(stderr, "Interface name could not be found from ip: %s\n", config->iface_ip);
+        return -1;
+    }
+
+    // Use ifname to find mac address
+    for (struct ifaddrs* ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+        if (!strcmp(ifa->ifa_name, xsk.ifname) && ifa->ifa_addr != NULL && ifa->ifa_addr->sa_family == AF_PACKET) {
+            struct sockaddr_ll* lladdr = (struct sockaddr_ll*)ifa->ifa_addr;
+            assert(lladdr->sll_halen == ETH_ALEN);
+            memcpy(xsk.smac, lladdr->sll_addr, ETH_ALEN);
+            break;
+        }
+    }
+
+    freeifaddrs(ifaddr);
 
     const struct xsk_socket_config scfg = { .rx_size = config->queue_length,
                                             .tx_size = config->queue_length,
                                             .libbpf_flags = XSK_LIBXDP_FLAGS__INHIBIT_PROG_LOAD, // don't load default xdp program
                                             .xdp_flags = config->xdp_flags,
-                                            .bind_flags = XDP_COPY | XDP_USE_NEED_WAKEUP }; // XDP_ZEROCOPY | XDP_USE_NEED_WAKEUP
-    SYSCALL(xsk_socket__create(&xsk.socket, config->ifname, config->queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
+                                            .bind_flags = XDP_USE_NEED_WAKEUP };
+    SYSCALL(xsk_socket__create(&xsk.socket, xsk.ifname, config->queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
     xsk.fd = xsk_socket__fd(xsk.socket);
 
     uint32_t idx;
@@ -167,27 +203,8 @@ int a_socket(int socket_family, int socket_type, int protocol, const struct a_so
     xsk_ring_prod__submit(&xsk.fill, config->queue_length);
 
     xsk.queue = config->queue;
-    strncpy(xsk.ifname, config->ifname, sizeof(xsk.ifname));
     xsk.queue_length = config->queue_length;
     xsk.buffer_size = buffer_size;
-
-    struct ifaddrs* ifaddr;
-    SYSCALL(getifaddrs(&ifaddr));
-    for (struct ifaddrs* ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
-        if (!strcmp(ifa->ifa_name, config->ifname) && ifa->ifa_addr) {
-            if (ifa->ifa_addr->sa_family == AF_PACKET) {
-                struct sockaddr_ll* lladdr = (struct sockaddr_ll*)ifa->ifa_addr;
-                assert(lladdr->sll_halen == ETH_ALEN);
-                memcpy(xsk.smac, lladdr->sll_addr, ETH_ALEN);
-            }
-
-            if (ifa->ifa_addr->sa_family == AF_INET) {
-                xsk.saddr = ((struct sockaddr_in*)ifa->ifa_addr)->sin_addr.s_addr;
-            }
-        }
-    }
-
-    freeifaddrs(ifaddr);
 
     map_insert_or_assign(&fd_to_xsk, xsk.fd, &xsk);
     return xsk.fd;

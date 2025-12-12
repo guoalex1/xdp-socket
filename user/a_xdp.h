@@ -9,7 +9,7 @@ extern "C" {
 #include <stdint.h>
 
 struct a_socket_config {
-    const char* ifname;
+    const char* iface_ip;
     uint32_t queue;
     uint16_t xdp_flags;
     uint32_t queue_length;
