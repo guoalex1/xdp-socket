@@ -55,14 +55,14 @@ int main(int argc, char** argv) {
     uint32_t src_addr = INADDR_ANY;
     inet_pton(AF_INET, iface_ip, &src_addr);
     struct sockaddr_in bind_addr = { .sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = src_addr };
-    a_bind(sockfd, (struct sockaddr*)&bind_addr, sizeof(bind_addr));
+    a_bind(sockfd, (struct sockaddr*)&bind_addr, sizeof(bind_addr)); // client must also bind to receive replies
 
     const char* msg = "Hello from client";
     char buf[2048];
 
     while (true) {
         ssize_t n = a_send(sockfd, msg, strlen(msg), 0);
-    
+
         if (n > 0) {
             printf("Sent %zd bytes to %s:%u\n", n, dest_ip, port);
 
