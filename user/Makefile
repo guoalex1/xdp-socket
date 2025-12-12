@@ -1,6 +1,6 @@
 # Compiler and flags
 CXX = g++
-CXXFLAGS = -O3 -Wall -c -I$(XDP_INCLUDE)
+CXXFLAGS = -O3 -Wall -c
 
 # Output
 LIBNAME = liba_xdp.a
