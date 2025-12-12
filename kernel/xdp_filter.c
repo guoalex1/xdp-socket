@@ -73,17 +73,11 @@ int xdp_xsk_filter(struct xdp_md* ctx)
         return XDP_PASS;
     }
 
-    bpf_printk("iph->daddr: %d, cfg->ip: %d\n", iph->daddr, cfg->ip);
-
-    bpf_printk("udph->dest: %d, cfg->port: %d\n", bpf_ntohs(udph->dest), bpf_ntohs(cfg->port));
-
     if ((cfg->ip != INADDR_ANY && iph->daddr != cfg->ip) || udph->dest != cfg->port) {
         return XDP_PASS;
     }
 
     int ret = bpf_redirect_map(&xsks_map, ctx->rx_queue_index, XDP_PASS);
-
-    bpf_printk("UDP packet on queue %d, ret: %d\n", ctx->rx_queue_index, ret);
 
     return ret;
 }
