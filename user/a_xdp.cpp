@@ -337,7 +337,7 @@ ssize_t a_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockadd
     struct iphdr* iph = (struct iphdr*)(eth + 1);
     struct udphdr* udph = (struct udphdr*)(iph + 1);
     void* payload = (void*)(udph + 1);
-    size_t payload_size = desc->len - ((uint8_t*)payload - (uint8_t*)data);
+    size_t payload_size = ntohs(udph->len) - sizeof(struct udphdr);
 
     int copy_size = size < payload_size ? size : payload_size;
     memcpy(buf, payload, copy_size);
