@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = -O3 -Wall
 
-LDFLAGS = -L$(XDP_LIB) -L../user
+LDFLAGS = -L../user
 LDLIBS = -la_xdp -lxdp -lbpf
 
 TARGET = client
