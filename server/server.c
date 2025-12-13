@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
-#include "../user/a_xdp.h"
+#include "../user/xdp_socket.h"
 
 int main(int argc, char** argv) {
     const char* iface_ip = NULL;
@@ -36,24 +36,24 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    struct a_socket_config cfg;
+    struct xdp_socket_config cfg;
     cfg.iface_ip = iface_ip;
     cfg.queue = queue;
-    a_init_config(&cfg);
+    xdp_init_config(&cfg);
 
-    int sockfd = a_socket(AF_XDP, SOCK_DGRAM, 0, &cfg);
+    int sockfd = xdp_socket(AF_XDP, SOCK_DGRAM, 0, &cfg);
 
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    a_bind(sockfd, (struct sockaddr*)&addr, sizeof(addr));
+    xdp_bind(sockfd, (struct sockaddr*)&addr, sizeof(addr));
 
     char buf[2048];
     while (true) {
         struct sockaddr_in src = {0};
         socklen_t srclen = sizeof(src);
-        ssize_t n = a_recvfrom(sockfd, buf, sizeof(buf) - 1, 0, (struct sockaddr*)&src, &srclen);
+        ssize_t n = xdp_recvfrom(sockfd, buf, sizeof(buf) - 1, 0, (struct sockaddr*)&src, &srclen);
 
         if (n > 0) {
             buf[n] = '\0';
@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
             printf("Received %zd bytes from %s:%u -> \"%s\"\n", n, ipstr, ntohs(src.sin_port), buf);
 
             const char* reply = "Reply from server";
-            ssize_t sent = a_sendto(sockfd, reply, strlen(reply), 0, (struct sockaddr*)&src, srclen);
+            ssize_t sent = xdp_sendto(sockfd, reply, strlen(reply), 0, (struct sockaddr*)&src, srclen);
 
             if (sent < 0) {
                 printf("Error sending reply\n");

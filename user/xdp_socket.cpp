@@ -14,8 +14,8 @@
 #include <fcntl.h>
 #include <arpa/inet.h>
 
-#include "a_xdp.h"
-#include "a_arpget.h"
+#include "xdp_socket.h"
+#include "arp.h"
 #include "uint_map.h"
 
 #define TESTING_ENABLE_ASSERTIONS 1
@@ -123,7 +123,7 @@ static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, uint32_t
     return sizeof(*eth) + sizeof(*iph) + sizeof(*udph) + len;
 }
 
-void a_init_config(struct a_socket_config* config) {
+void xdp_init_config(struct xdp_socket_config* config) {
     if (config != nullptr) {
         config->queue = 0;
         config->queue_length = 16;
@@ -131,7 +131,7 @@ void a_init_config(struct a_socket_config* config) {
     }
 }
 
-int a_socket(int socket_family, int socket_type, int protocol, const struct a_socket_config* config) {
+int xdp_socket(int socket_family, int socket_type, int protocol, const struct xdp_socket_config* config) {
     if (socket_type != SOCK_DGRAM || config == nullptr || config->iface_ip == nullptr) {
         return socket(socket_family, socket_type, protocol);
     }
@@ -210,7 +210,7 @@ int a_socket(int socket_family, int socket_type, int protocol, const struct a_so
     return xsk.fd;
 }
 
-int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
+int xdp_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
     xsk_queue* xsk = map_find(&fd_to_xsk, sockfd);
 
     if (xsk == NULL) {
@@ -248,7 +248,7 @@ int a_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
     return 0;
 }
 
-int a_connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
+int xdp_connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
     xsk_queue* xsk = map_find(&fd_to_xsk, sockfd);
 
     if (xsk == NULL) {
@@ -261,7 +261,7 @@ int a_connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
     return 0;
 }
 
-ssize_t a_sendto(int sockfd, const void* buf, size_t size, int flags, const struct sockaddr* dest_addr, socklen_t addrlen) {
+ssize_t xdp_sendto(int sockfd, const void* buf, size_t size, int flags, const struct sockaddr* dest_addr, socklen_t addrlen) {
     xsk_queue* xsk = map_find(&fd_to_xsk, sockfd);
 
     if (xsk == NULL) {
@@ -277,7 +277,7 @@ ssize_t a_sendto(int sockfd, const void* buf, size_t size, int flags, const stru
     uint16_t dport = (dest_addr == nullptr) ? xsk->dport : ((sockaddr_in*)dest_addr)->sin_port;
 
     char dmac[ETH_ALEN] = {0};
-    if (a_get_mac(xsk->ifname, xsk->saddr, xsk->smac, daddr, dmac) != 0) {
+    if (get_mac(xsk->ifname, xsk->saddr, xsk->smac, daddr, dmac) != 0) {
         return -1;
     }
 
@@ -303,11 +303,11 @@ ssize_t a_sendto(int sockfd, const void* buf, size_t size, int flags, const stru
     return -1;
 }
 
-ssize_t a_send(int sockfd, const void* buf, size_t size, int flags) {
-    return a_sendto(sockfd, buf, size, flags, nullptr, 0);
+ssize_t xdp_send(int sockfd, const void* buf, size_t size, int flags) {
+    return xdp_sendto(sockfd, buf, size, flags, nullptr, 0);
 }
 
-ssize_t a_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockaddr* src_addr, socklen_t* addrlen) {
+ssize_t xdp_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockaddr* src_addr, socklen_t* addrlen) {
     xsk_queue* xsk = map_find(&fd_to_xsk, sockfd);
 
     if (xsk == NULL) {
@@ -358,11 +358,11 @@ ssize_t a_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockadd
     return copy_size;
 }
 
-ssize_t a_recv(int sockfd, void* buf, size_t size, int flags) {
-    return a_recvfrom(sockfd, buf, size, flags, nullptr, nullptr);
+ssize_t xdp_recv(int sockfd, void* buf, size_t size, int flags) {
+    return xdp_recvfrom(sockfd, buf, size, flags, nullptr, nullptr);
 }
 
-int a_close(int fd) {
+int xdp_close(int fd) {
     xsk_queue* xsk = map_find(&fd_to_xsk, fd);
 
     if (xsk == NULL) {
@@ -386,7 +386,7 @@ int a_close(int fd) {
     return 0;
 }
 
-int a_fcntl(int fd, int cmd, ...) {
+int xdp_fcntl(int fd, int cmd, ...) {
     int result;
     va_list args;
     va_start(args, cmd);
@@ -447,7 +447,7 @@ int a_fcntl(int fd, int cmd, ...) {
     return result;
 }
 
-int a_getsockopt(int sockfd, int level, int optname, void* optval, socklen_t* optlen) {
+int xdp_getsockopt(int sockfd, int level, int optname, void* optval, socklen_t* optlen) {
     if (map_find(&fd_to_xsk, sockfd) == NULL) {
         return getsockopt(sockfd, level, optname, optval, optlen);
     }
@@ -455,7 +455,7 @@ int a_getsockopt(int sockfd, int level, int optname, void* optval, socklen_t* op
     return -1;
 }
 
-int a_setsockopt(int sockfd, int level, int optname, const void* optval, socklen_t optlen) {
+int xdp_setsockopt(int sockfd, int level, int optname, const void* optval, socklen_t optlen) {
     if (map_find(&fd_to_xsk, sockfd) == NULL) {
         return setsockopt(sockfd, level, optname, optval, optlen);
     }

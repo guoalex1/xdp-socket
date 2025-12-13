@@ -8,7 +8,7 @@
 #include <linux/if_arp.h>
 #include <stdio.h>
 
-#include "a_arpget.h"
+#include "arp.h"
 #include "uint_map.h"
 
 #define IPV4_ALEN 4
@@ -78,7 +78,7 @@ static int arp_exchange(int fd, const char src_mac[ETH_ALEN], uint32_t src_ip, u
     }
 }
 
-int a_get_mac(const char* ifname, const uint32_t src_ip, const char src_mac[ETH_ALEN], const uint32_t dst_ip, char dst_mac[ETH_ALEN])
+int get_mac(const char* ifname, const uint32_t src_ip, const char src_mac[ETH_ALEN], const uint32_t dst_ip, char dst_mac[ETH_ALEN])
 {
     char (*mac)[ETH_ALEN] = map_find(&arp_table, dst_ip);
 

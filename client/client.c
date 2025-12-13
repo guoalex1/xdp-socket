@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
-#include "../user/a_xdp.h"
+#include "../user/xdp_socket.h"
 
 int main(int argc, char** argv) {
     const char* iface_ip = NULL;
@@ -40,33 +40,33 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    struct a_socket_config cfg = { .iface_ip = iface_ip, .queue = queue };
-    a_init_config(&cfg);
+    struct xdp_socket_config cfg = { .iface_ip = iface_ip, .queue = queue };
+    xdp_init_config(&cfg);
 
-    int sockfd = a_socket(AF_XDP, SOCK_DGRAM, 0, &cfg);
+    int sockfd = xdp_socket(AF_XDP, SOCK_DGRAM, 0, &cfg);
 
     struct sockaddr_in dest = {0};
     dest.sin_family = AF_INET;
     dest.sin_port = htons(port);
     inet_pton(AF_INET, dest_ip, &dest.sin_addr);
 
-    a_connect(sockfd, (struct sockaddr*)&dest, sizeof(dest));
+    xdp_connect(sockfd, (struct sockaddr*)&dest, sizeof(dest));
 
     uint32_t src_addr = INADDR_ANY;
     inet_pton(AF_INET, iface_ip, &src_addr);
     struct sockaddr_in bind_addr = { .sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = src_addr };
-    a_bind(sockfd, (struct sockaddr*)&bind_addr, sizeof(bind_addr)); // client must also bind to receive replies
+    xdp_bind(sockfd, (struct sockaddr*)&bind_addr, sizeof(bind_addr)); // client must also bind to receive replies
 
     const char* msg = "Hello from client";
     char buf[2048];
 
     while (true) {
-        ssize_t n = a_send(sockfd, msg, strlen(msg), 0);
+        ssize_t n = xdp_send(sockfd, msg, strlen(msg), 0);
 
         if (n > 0) {
             printf("Sent %zd bytes to %s:%u\n", n, dest_ip, port);
 
-            ssize_t r = a_recv(sockfd, buf, sizeof(buf) - 1, 0);
+            ssize_t r = xdp_recv(sockfd, buf, sizeof(buf) - 1, 0);
             if (r > 0) {
                 buf[r] = '\0';
                 printf("Received reply: \"%s\"\n", buf);

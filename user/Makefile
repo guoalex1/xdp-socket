@@ -1,18 +1,18 @@
 # Compiler and flags
 CXX = g++
-CXXFLAGS = -O3 -Wall -c
+CXXFLAGS = -O3 -Wall
 
 # Output
-LIBNAME = liba_xdp.a
-OBJS = a_xdp.o a_arpget.o
-SRC = a_xdp.cpp a_arpget.cpp
+LIBNAME = libxdp_socket.a
+SRC = xdp_socket.cpp arp.cpp
+OBJS = $(SRC:.cpp=.o)
 
 # Default target
 all: $(LIBNAME)
 
 # Compile source files into object files
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) -o $@ $<
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 # Archive into static library
 $(LIBNAME): $(OBJS)
