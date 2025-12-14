@@ -45,6 +45,10 @@ int main(int argc, char** argv) {
 
     int sockfd = xdp_socket(AF_XDP, SOCK_DGRAM, 0, &cfg);
 
+    if (sockfd < 0) {
+        return -1;
+    }
+
     struct sockaddr_in dest = {0};
     dest.sin_family = AF_INET;
     dest.sin_port = htons(port);
@@ -55,7 +59,9 @@ int main(int argc, char** argv) {
     uint32_t src_addr = INADDR_ANY;
     inet_pton(AF_INET, iface_ip, &src_addr);
     struct sockaddr_in bind_addr = { .sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = src_addr };
-    xdp_bind(sockfd, (struct sockaddr*)&bind_addr, sizeof(bind_addr)); // client must also bind to receive replies
+    if (xdp_bind(sockfd, (struct sockaddr*)&bind_addr, sizeof(bind_addr))) { // client must also bind to receive replies
+        return -1;
+    }
 
     const char* msg = "Hello from client";
     char buf[2048];
