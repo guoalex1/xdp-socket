@@ -43,11 +43,17 @@ int main(int argc, char** argv) {
 
     int sockfd = xdp_socket(AF_XDP, SOCK_DGRAM, 0, &cfg);
 
+    if (sockfd < 0) {
+        return -1;
+    }
+
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    xdp_bind(sockfd, (struct sockaddr*)&addr, sizeof(addr));
+    if (xdp_bind(sockfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        return -1;
+    }
 
     char buf[2048];
     while (true) {
