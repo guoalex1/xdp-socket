@@ -1,3 +1,5 @@
+xdp-socket is a socket interface that uses XDP and XSK for UDP packets
+
 Setup:
 Setup dependencies for XDP: https://github.com/xdp-project/xdp-tutorial/blob/main/setup_dependencies.org
 
@@ -8,12 +10,13 @@ To build the XDP filter, run make inside directory 'kernel'
 
 With the xdp-loader from xdp-tools:
 sudo xdp-loader load <interface_name> xdp_filter.o --pin-path /sys/fs/bpf/xdp/xsk_filter
+Example: sudo xdp-loader load enp0s3 xdp_filter.o --pin-path /sys/fs/bpf/xdp/xsk_filter
 
 User:
 Run make inside the directory 'user' and the static library libxdp.a will be built in the same directory
 
 Examples:
-The directories server and client provide a minimal request-reply example using xdp_sockets
+The directories server and client provide a minimal request-reply example using xdp-sockets
 
 Server:
 Run make inside the directory 'server' to build the server
