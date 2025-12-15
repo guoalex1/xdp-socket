@@ -7,6 +7,11 @@
 
 #include "../user/xdp_socket.h"
 
+static void print_usage(const char* program_name)
+{
+    fprintf(stderr, "usage: %s -a <iface_ip> -p <port> -d <dest_ip> [-q queue (default: 0)]\n", program_name);
+}
+
 int main(int argc, char** argv) {
     const char* iface_ip = NULL;
     uint32_t queue = 0;
@@ -14,7 +19,7 @@ int main(int argc, char** argv) {
     const char* dest_ip = NULL;
 
     int opt;
-    while ((opt = getopt(argc, argv, "a:q:p:d:h:")) != -1) {
+    while ((opt = getopt(argc, argv, "a:q:p:d:h")) != -1) {
         switch (opt) {
         case 'a':
             iface_ip = optarg;
@@ -30,13 +35,14 @@ int main(int argc, char** argv) {
             break;
         case 'h':
         default:
-            fprintf(stderr, "usage: %s -a <iface_ip> -q <queue> -p <port> -d <dest_ip>\n", argv[0]);
+            print_usage(argv[0]);
             return -1;
         }
     }
 
     if (!iface_ip || !dest_ip || port == 0) {
         fprintf(stderr, "Missing required parameters\n");
+        print_usage(argv[0]);
         return -1;
     }
 

@@ -7,6 +7,11 @@
 
 #include "../user/xdp_socket.h"
 
+static void print_usage(const char* program_name)
+{
+    fprintf(stderr, "usage: %s -a <iface_ip> -p <port> [-q queue (default: 0)]\n", program_name);
+}
+
 int main(int argc, char** argv)
 {
     const char* iface_ip = NULL;
@@ -14,7 +19,7 @@ int main(int argc, char** argv)
     uint16_t port = 0;
 
     int opt;
-    while ((opt = getopt(argc, argv, "a:q:p:h:")) != -1) {
+    while ((opt = getopt(argc, argv, "a:q:p:h")) != -1) {
         switch (opt) {
         case 'a':
             iface_ip = optarg;
@@ -27,13 +32,14 @@ int main(int argc, char** argv)
             break;
         case 'h':
         default:
-            fprintf(stderr, "usage: %s -a <iface_ip> -q <queue> -p <port>\n", argv[0]);
+            print_usage(argv[0]);
             return -1;
         }
     }
 
     if (!iface_ip || port == 0) {
         fprintf(stderr, "Msissing required parameters\n");
+        print_usage(argv[0]);
         return -1;
     }
 
@@ -55,6 +61,8 @@ int main(int argc, char** argv)
     if (xdp_bind(sockfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         return -1;
     }
+
+    printf("Server receiving on %s | port %u | queue %d\n", iface_ip, port, queue);
 
     char buf[2048];
     while (true) {
