@@ -44,12 +44,12 @@ struct xsk_queue {
 
 static uint_map<xsk_queue> fd_to_xsk = {};
 
-struct filter_addr_config {
+struct filter_bind_addr {
     uint32_t ip;
     uint16_t port;
 };
 
-static const uint32_t configKey = 0;
+static const uint32_t bind_addr_key = 0;
 
 static uint32_t checksum_nofold(void* data, size_t len, uint32_t sum)
 {
@@ -77,7 +77,8 @@ static uint16_t checksum_fold(void* data, size_t len, uint32_t sum)
 	return ~sum;
 }
 
-static void release_tx(xsk_queue* xsk) {
+static void release_tx(xsk_queue* xsk)
+{
     uint32_t idx = 0;
     int completed = xsk_ring_cons__peek(&xsk->comp, xsk->queue_length, &idx);
     if (completed > 0) {
@@ -86,7 +87,8 @@ static void release_tx(xsk_queue* xsk) {
 }
 
 // Returns size
-static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, uint32_t daddr, uint16_t dport, const char* smac, const char* dmac, uint32_t saddr, uint16_t sport) {
+static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, uint32_t daddr, uint16_t dport, const char* smac, const char* dmac, uint32_t saddr, uint16_t sport)
+{
     struct ethhdr* eth = (struct ethhdr*)data;
     struct iphdr* iph = (struct iphdr*)(eth + 1);
     struct udphdr* udph = (struct udphdr*)(iph + 1);
@@ -123,7 +125,8 @@ static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, uint32_t
     return sizeof(*eth) + sizeof(*iph) + sizeof(*udph) + len;
 }
 
-void xdp_init_config(struct xdp_socket_config* config) {
+void xdp_init_config(struct xdp_socket_config* config)
+{
     if (config != nullptr) {
         config->queue = 0;
         config->queue_length = 16;
@@ -131,7 +134,8 @@ void xdp_init_config(struct xdp_socket_config* config) {
     }
 }
 
-int xdp_socket(int socket_family, int socket_type, int protocol, const struct xdp_socket_config* config) {
+int xdp_socket(int socket_family, int socket_type, int protocol, const struct xdp_socket_config* config)
+{
     if (socket_type != SOCK_DGRAM || config == nullptr || config->iface_ip == nullptr) {
         return socket(socket_family, socket_type, protocol);
     }
@@ -210,37 +214,38 @@ int xdp_socket(int socket_family, int socket_type, int protocol, const struct xd
     return xsk.fd;
 }
 
-int xdp_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
+int xdp_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen)
+{
     xsk_queue* xsk = map_find(&fd_to_xsk, sockfd);
 
     if (xsk == NULL) {
         return bind(sockfd, addr, addrlen);
     }
 
-    struct filter_addr_config config{};
+    struct filter_bind_addr bind_addr{};
 
     if (addr->sa_family == AF_INET && addrlen >= sizeof(struct sockaddr_in)) {
         struct sockaddr_in* sin = (struct sockaddr_in*)addr;
-        config.ip = sin->sin_addr.s_addr;
-        config.port = sin->sin_port;
+        bind_addr.ip = sin->sin_addr.s_addr;
+        bind_addr.port = sin->sin_port;
         xsk->sport = sin->sin_port;
     } else {
         return -1;
     }
 
-    // xsks_map
-    int map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsks_map");
+    // xsk_map
+    int map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsk_map");
     int sock_fd = xsk_socket__fd(xsk->socket);
     bpf_map_update_elem(map_fd, &xsk->queue, &sock_fd, BPF_ANY);
 
-    // config_map
-    int config_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/config_map");
-    if (config_fd < 0) {
-        fprintf(stderr, "Error getting config_map: verify xdp program is loaded correctly\n");
+    // bind_addr_map
+    int bind_addr_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/bind_addr_map");
+    if (bind_addr_fd < 0) {
+        fprintf(stderr, "Error getting bind_addr_map: verify xdp program is loaded correctly\n");
         return -1;
     }
 
-    if (bpf_map_update_elem(config_fd, &configKey, &config, BPF_ANY) < 0) {
+    if (bpf_map_update_elem(bind_addr_fd, &bind_addr_key, &bind_addr, BPF_ANY) < 0) {
         fprintf(stderr, "bpf_map_update_elem error: verify xdp program is loaded correctly\n");
         return -1;
     }
@@ -248,7 +253,8 @@ int xdp_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
     return 0;
 }
 
-int xdp_connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
+int xdp_connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen)
+{
     xsk_queue* xsk = map_find(&fd_to_xsk, sockfd);
 
     if (xsk == NULL) {
@@ -261,7 +267,8 @@ int xdp_connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
     return 0;
 }
 
-ssize_t xdp_sendto(int sockfd, const void* buf, size_t size, int flags, const struct sockaddr* dest_addr, socklen_t addrlen) {
+ssize_t xdp_sendto(int sockfd, const void* buf, size_t size, int flags, const struct sockaddr* dest_addr, socklen_t addrlen)
+{
     xsk_queue* xsk = map_find(&fd_to_xsk, sockfd);
 
     if (xsk == NULL) {
@@ -303,11 +310,13 @@ ssize_t xdp_sendto(int sockfd, const void* buf, size_t size, int flags, const st
     return -1;
 }
 
-ssize_t xdp_send(int sockfd, const void* buf, size_t size, int flags) {
+ssize_t xdp_send(int sockfd, const void* buf, size_t size, int flags)
+{
     return xdp_sendto(sockfd, buf, size, flags, nullptr, 0);
 }
 
-ssize_t xdp_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockaddr* src_addr, socklen_t* addrlen) {
+ssize_t xdp_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockaddr* src_addr, socklen_t* addrlen)
+{
     xsk_queue* xsk = map_find(&fd_to_xsk, sockfd);
 
     if (xsk == NULL) {
@@ -358,11 +367,13 @@ ssize_t xdp_recvfrom(int sockfd, void* buf, size_t size, int flags, struct socka
     return copy_size;
 }
 
-ssize_t xdp_recv(int sockfd, void* buf, size_t size, int flags) {
+ssize_t xdp_recv(int sockfd, void* buf, size_t size, int flags)
+{
     return xdp_recvfrom(sockfd, buf, size, flags, nullptr, nullptr);
 }
 
-int xdp_close(int fd) {
+int xdp_close(int fd)
+{
     xsk_queue* xsk = map_find(&fd_to_xsk, fd);
 
     if (xsk == NULL) {
@@ -386,7 +397,8 @@ int xdp_close(int fd) {
     return 0;
 }
 
-int xdp_fcntl(int fd, int cmd, ...) {
+int xdp_fcntl(int fd, int cmd, ...)
+{
     int result;
     va_list args;
     va_start(args, cmd);
@@ -425,21 +437,21 @@ int xdp_fcntl(int fd, int cmd, ...) {
         }
     } else {
         switch (cmd) {
-        case F_GETFL: {
-            result = xsk->status_flags;
-            break;
-        }
-        case F_SETFL: {
-            int flags = va_arg(args, int);
-            xsk->status_flags |= flags;
-            result = 0;
-            return flags;
-        }
-        default: {
-            errno = EINVAL;
-            result = -1;
-            break;
-        }
+            case F_GETFL: {
+                result = xsk->status_flags;
+                break;
+            }
+            case F_SETFL: {
+                int flags = va_arg(args, int);
+                xsk->status_flags |= flags;
+                result = 0;
+                return flags;
+            }
+            default: {
+                errno = EINVAL;
+                result = -1;
+                break;
+            }
         }
     }
 
@@ -447,7 +459,8 @@ int xdp_fcntl(int fd, int cmd, ...) {
     return result;
 }
 
-int xdp_getsockopt(int sockfd, int level, int optname, void* optval, socklen_t* optlen) {
+int xdp_getsockopt(int sockfd, int level, int optname, void* optval, socklen_t* optlen)
+{
     if (map_find(&fd_to_xsk, sockfd) == NULL) {
         return getsockopt(sockfd, level, optname, optval, optlen);
     }
@@ -455,7 +468,8 @@ int xdp_getsockopt(int sockfd, int level, int optname, void* optval, socklen_t* 
     return -1;
 }
 
-int xdp_setsockopt(int sockfd, int level, int optname, const void* optval, socklen_t optlen) {
+int xdp_setsockopt(int sockfd, int level, int optname, const void* optval, socklen_t optlen)
+{
     if (map_find(&fd_to_xsk, sockfd) == NULL) {
         return setsockopt(sockfd, level, optname, optval, optlen);
     }

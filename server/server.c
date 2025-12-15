@@ -7,7 +7,8 @@
 
 #include "../user/xdp_socket.h"
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv)
+{
     const char* iface_ip = NULL;
     uint32_t queue = 0;
     uint16_t port = 0;

@@ -13,6 +13,8 @@
 
 #define IPV4_ALEN 4
 
+#define ARP_PACKET_SIZE 60
+
 static uint_map<char[ETH_ALEN]> arp_table;
 
 struct arp {
@@ -33,8 +35,8 @@ static int arp_exchange(int fd, const char src_mac[ETH_ALEN], uint32_t src_ip, u
     unsigned char packet[42];
     memset(packet, 0, sizeof(packet));
 
-    struct ethhdr *eth = (struct ethhdr *) packet;
-    struct arp *arp = (struct arp *) (packet + ETH_HLEN);
+    struct ethhdr* eth = (struct ethhdr*) packet;
+    struct arp* arp = (struct arp*)(packet + ETH_HLEN);
 
     // Ethernet header
     memset(eth->h_dest, 0xff, ETH_ALEN);
@@ -61,10 +63,10 @@ static int arp_exchange(int fd, const char src_mac[ETH_ALEN], uint32_t src_ip, u
 
     // Wait for reply
     for (;;) {
-        unsigned char buf[60];
+        unsigned char buf[ARP_PACKET_SIZE];
         ssize_t n = recv(fd, buf, sizeof(buf), 0);
 
-        if (n < 42) {
+        if (n < ARP_PACKET_SIZE) {
             continue;
         }
 

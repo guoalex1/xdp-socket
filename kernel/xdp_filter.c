@@ -21,9 +21,9 @@ struct {
 	__uint(value_size, sizeof(int));
 	__uint(max_entries, DEFAULT_QUEUE_IDS);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
-} xsks_map SEC(".maps");
+} xsk_map SEC(".maps");
 
-struct config {
+struct bind_addr {
     __u32 ip;
     __u16 port;
 };
@@ -32,11 +32,11 @@ struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 1);
     __type(key, __u32);
-    __type(value, struct config);
+    __type(value, struct bind_addr);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
-} config_map SEC(".maps");
+} bind_addr_map SEC(".maps");
 
-static const __u32 config_key = 0;
+static const __u32 bind_addr_key = 0;
 
 SEC("xdp")
 int xdp_xsk_filter(struct xdp_md* ctx)
@@ -68,7 +68,7 @@ int xdp_xsk_filter(struct xdp_md* ctx)
         return XDP_PASS;
     }
 
-    struct config* cfg = bpf_map_lookup_elem(&config_map, &config_key);
+    struct bind_addr* cfg = bpf_map_lookup_elem(&bind_addr_map, &bind_addr_key);
     if (!cfg) {
         return XDP_PASS;
     }
@@ -77,10 +77,9 @@ int xdp_xsk_filter(struct xdp_md* ctx)
         return XDP_PASS;
     }
 
-    int ret = bpf_redirect_map(&xsks_map, ctx->rx_queue_index, XDP_PASS);
+    int ret = bpf_redirect_map(&xsk_map, ctx->rx_queue_index, XDP_PASS);
 
     return ret;
 }
-
 
 char _license[] SEC("license") = "GPL";
