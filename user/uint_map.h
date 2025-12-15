@@ -17,6 +17,11 @@ template <typename T> struct uint_map {
     uint_map_entry<T>* buckets[MAP_ENTRIES];
 };
 
+// If the map is not global or static
+template <typename T> void map_init(uint_map<T>* map) {
+    memset(map->buckets, 0, sizeof(map->buckets));
+}
+
 template <typename T> bool map_insert_or_assign(uint_map<T>* map, uint32_t key, T* value) {
     if (value == NULL) {
         return false;
