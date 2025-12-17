@@ -136,8 +136,13 @@ void xdp_init_config(struct xdp_socket_config* config)
 
 int xdp_socket(int socket_family, int socket_type, int protocol, const struct xdp_socket_config* config)
 {
-    if (socket_type != SOCK_DGRAM || config == nullptr || config->iface_ip == nullptr) {
+    if (socket_type != SOCK_DGRAM || config == nullptr) {
         return socket(socket_family, socket_type, protocol);
+    }
+
+    if (config->iface_ip == nullptr) {
+        fprintf(stderr, "Interface ip is required for xdp_socket setup\n");
+        return -1;
     }
 
     xsk_queue xsk{};
