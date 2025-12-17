@@ -141,7 +141,7 @@ int xdp_socket(int socket_family, int socket_type, int protocol, const struct xd
     }
 
     if (config->iface_ip == nullptr) {
-        fprintf(stderr, "Interface ip is required for xdp_socket setup\n");
+        fprintf(stderr, "Interface ip is required for xdp_socket creation\n");
         return -1;
     }
 
@@ -200,7 +200,7 @@ int xdp_socket(int socket_family, int socket_type, int protocol, const struct xd
     uint32_t idx;
     uint32_t cnt = xsk_ring_prod__reserve(&xsk.fill, config->queue_length, &idx);
     if (idx != 0 || cnt != config->queue_length) {
-        fprintf(stderr, "ERROR: RX fill ring failed: %u %u\n", cnt, idx);
+        fprintf(stderr, "Error: RX fill ring failed: %u %u\n", cnt, idx);
         return -1;
     }
     // fill ring is second half of umem
