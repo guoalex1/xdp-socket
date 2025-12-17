@@ -66,7 +66,9 @@ int xdp_xsk_filter(struct xdp_md* ctx)
         return XDP_PASS;
     }
 
-    struct bind_addr bind_addr_key = {iph->daddr, udph->dest};
+    struct bind_addr bind_addr_key = {0};
+    bind_addr_key.ip = iph->daddr;
+    bind_addr_key.port = udph->dest;
 
     void* lookup_result = bpf_map_lookup_elem(&bind_addr_map, &bind_addr_key);
 

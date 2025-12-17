@@ -50,8 +50,6 @@ struct filter_bind_addr {
     uint16_t port;
 };
 
-static const uint32_t bind_addr_key = 0;
-
 static uint32_t checksum_nofold(void* data, size_t len, uint32_t sum)
 {
 	uint16_t* words = (uint16_t*)data;
@@ -228,7 +226,7 @@ int xdp_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen)
         return bind(sockfd, addr, addrlen);
     }
 
-    struct filter_bind_addr bind_addr{};
+    struct filter_bind_addr bind_addr = {0};
 
     if (addr->sa_family == AF_INET && addrlen >= sizeof(struct sockaddr_in)) {
         struct sockaddr_in* sin = (struct sockaddr_in*)addr;
@@ -399,7 +397,9 @@ int xdp_close(int fd)
 
     int bind_addr_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/bind_addr_map");
     if (bind_addr_fd >= 0) {
-        struct filter_bind_addr key = {xsk->bind_ip, xsk->sport};
+        struct filter_bind_addr key = {0};
+        key.ip = xsk->bind_ip;
+        key.port = xsk->sport;
 
         bpf_map_delete_elem(bind_addr_fd, &key);
         close(bind_addr_fd);
