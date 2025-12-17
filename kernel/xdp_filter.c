@@ -29,14 +29,12 @@ struct bind_addr {
 };
 
 struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);
-    __type(key, __u32);
-    __type(value, struct bind_addr);
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, struct bind_addr);
+    __type(value, __u8); // use as flag
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } bind_addr_map SEC(".maps");
-
-static const __u32 bind_addr_key = 0;
 
 SEC("xdp")
 int xdp_xsk_filter(struct xdp_md* ctx)
@@ -68,12 +66,16 @@ int xdp_xsk_filter(struct xdp_md* ctx)
         return XDP_PASS;
     }
 
-    struct bind_addr* cfg = bpf_map_lookup_elem(&bind_addr_map, &bind_addr_key);
-    if (!cfg) {
-        return XDP_PASS;
+    struct bind_addr bind_addr_key = {iph->daddr, udph->dest};
+
+    void* lookup_result = bpf_map_lookup_elem(&bind_addr_map, &bind_addr_key);
+
+    if (!lookup_result) {
+        bind_addr_key.ip = INADDR_ANY;
+        lookup_result = bpf_map_lookup_elem(&bind_addr_map, &bind_addr_key);
     }
 
-    if ((cfg->ip != INADDR_ANY && iph->daddr != cfg->ip) || udph->dest != cfg->port) {
+    if (!lookup_result) {
         return XDP_PASS;
     }
 

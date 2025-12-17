@@ -37,6 +37,7 @@ struct xsk_queue {
     uint16_t sport = 0;
     uint32_t daddr = 0;
     uint16_t dport = 0;
+    uint32_t bind_ip = 0;
     int status_flags = 0;
     int queue_length = 16;
     int buffer_size = 0;
@@ -233,15 +234,22 @@ int xdp_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen)
         struct sockaddr_in* sin = (struct sockaddr_in*)addr;
         bind_addr.ip = sin->sin_addr.s_addr;
         bind_addr.port = sin->sin_port;
+        xsk->bind_ip = sin->sin_addr.s_addr;
         xsk->sport = sin->sin_port;
     } else {
         return -1;
     }
 
     // xsk_map
-    int map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsk_map");
+    int xsk_map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsk_map");
     int sock_fd = xsk_socket__fd(xsk->socket);
-    bpf_map_update_elem(map_fd, &xsk->queue, &sock_fd, BPF_ANY);
+    int ret = bpf_map_update_elem(xsk_map_fd, &xsk->queue, &sock_fd, BPF_ANY);
+    close(xsk_map_fd);
+
+    if (ret < 0) {
+        fprintf(stderr, "Failed to update xsk map\n");
+        return -1;
+    }
 
     // bind_addr_map
     int bind_addr_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/bind_addr_map");
@@ -250,8 +258,12 @@ int xdp_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen)
         return -1;
     }
 
-    if (bpf_map_update_elem(bind_addr_fd, &bind_addr_key, &bind_addr, BPF_ANY) < 0) {
-        fprintf(stderr, "bpf_map_update_elem error: verify xdp program is loaded correctly\n");
+    uint8_t value = 1;
+    ret = bpf_map_update_elem(bind_addr_fd, &bind_addr, &value, BPF_ANY);
+    close(bind_addr_fd);
+
+    if (ret < 0) {
+        fprintf(stderr, "Failed to update bind map\n");
         return -1;
     }
 
@@ -383,6 +395,20 @@ int xdp_close(int fd)
 
     if (xsk == NULL) {
         return close(fd);
+    }
+
+    int bind_addr_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/bind_addr_map");
+    if (bind_addr_fd >= 0) {
+        struct filter_bind_addr key = {xsk->bind_ip, xsk->sport};
+
+        bpf_map_delete_elem(bind_addr_fd, &key);
+        close(bind_addr_fd);
+    }
+
+    int xsk_map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsk_map");
+    if (xsk_map_fd >= 0) {
+        bpf_map_delete_elem(xsk_map_fd, &xsk->queue);
+        close(xsk_map_fd);
     }
 
     if (xsk->socket != NULL) {
