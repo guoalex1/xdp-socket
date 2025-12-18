@@ -1,22 +1,34 @@
-# Compiler and flags
 CXX = g++
 CXXFLAGS = -O3 -Wall
 
-# Output
 LIBNAME = libxdp_socket.a
 SRC = xdp_socket.cpp arp.cpp
 OBJS = $(SRC:.cpp=.o)
 
-# Default target
 all: $(LIBNAME)
 
-# Compile source files into object files
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-# Archive into static library
 $(LIBNAME): $(OBJS)
 	ar rcs $@ $^
 
 clean:
 	rm -f $(OBJS) $(LIBNAME)
+
+PREFIX ?= /usr/local
+LIBDIR ?= $(PREFIX)/lib
+INCLUDEDIR ?= $(PREFIX)/include/xdp_socket
+HEADER = xdp_socket.h
+
+.PHONY: install uninstall
+
+install: $(LIBNAME)
+	install -d $(LIBDIR)
+	install -d $(INCLUDEDIR)
+	install -m 644 $(LIBNAME) $(LIBDIR)
+	install -m 644 $(HEADER) $(INCLUDEDIR)
+
+uninstall:
+	rm -f $(LIBDIR)/$(LIBNAME)
+	rm -f $(INCLUDEDIR)/$(HEADER)
