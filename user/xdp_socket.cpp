@@ -242,7 +242,7 @@ int xdp_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen)
     snprintf(bpf_map_path, sizeof(bpf_map_path), "/sys/fs/bpf/xdp/xsk_filter/%s/xsk_map", xsk->ifname);
 
     // xsk_map
-    int xsk_map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsk_map");
+    int xsk_map_fd = bpf_obj_get(bpf_map_path);
     int sock_fd = xsk_socket__fd(xsk->socket);
     int ret = bpf_map_update_elem(xsk_map_fd, &xsk->queue, &sock_fd, BPF_ANY);
     close(xsk_map_fd);
@@ -255,7 +255,7 @@ int xdp_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen)
     snprintf(bpf_map_path, sizeof(bpf_map_path), "/sys/fs/bpf/xdp/xsk_filter/%s/bind_addr_map", xsk->ifname);
 
     // bind_addr_map
-    int bind_addr_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/bind_addr_map");
+    int bind_addr_fd = bpf_obj_get(bpf_map_path);
     if (bind_addr_fd < 0) {
         fprintf(stderr, "Error getting bind_addr_map: verify xdp program is loaded correctly\n");
         return -1;
