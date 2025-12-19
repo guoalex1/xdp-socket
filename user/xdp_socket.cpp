@@ -238,6 +238,9 @@ int xdp_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen)
         return -1;
     }
 
+    char bpf_map_path[64];
+    snprintf(bpf_map_path, sizeof(bpf_map_path), "/sys/fs/bpf/xdp/xsk_filter/%s/xsk_map", xsk->ifname);
+
     // xsk_map
     int xsk_map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsk_map");
     int sock_fd = xsk_socket__fd(xsk->socket);
@@ -248,6 +251,8 @@ int xdp_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen)
         fprintf(stderr, "Failed to update xsk map\n");
         return -1;
     }
+
+    snprintf(bpf_map_path, sizeof(bpf_map_path), "/sys/fs/bpf/xdp/xsk_filter/%s/bind_addr_map", xsk->ifname);
 
     // bind_addr_map
     int bind_addr_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/bind_addr_map");
@@ -395,7 +400,10 @@ int xdp_close(int fd)
         return close(fd);
     }
 
-    int bind_addr_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/bind_addr_map");
+    char bpf_map_path[64];
+    snprintf(bpf_map_path, sizeof(bpf_map_path), "/sys/fs/bpf/xdp/xsk_filter/%s/bind_addr_map", xsk->ifname);
+
+    int bind_addr_fd = bpf_obj_get(bpf_map_path);
     if (bind_addr_fd >= 0) {
         struct filter_bind_addr key = {0};
         key.ip = xsk->bind_ip;
@@ -405,7 +413,9 @@ int xdp_close(int fd)
         close(bind_addr_fd);
     }
 
-    int xsk_map_fd = bpf_obj_get("/sys/fs/bpf/xdp/xsk_filter/xsk_map");
+    snprintf(bpf_map_path, sizeof(bpf_map_path), "/sys/fs/bpf/xdp/xsk_filter/%s/xsk_map", xsk->ifname);
+
+    int xsk_map_fd = bpf_obj_get(bpf_map_path);
     if (xsk_map_fd >= 0) {
         bpf_map_delete_elem(xsk_map_fd, &xsk->queue);
         close(xsk_map_fd);
