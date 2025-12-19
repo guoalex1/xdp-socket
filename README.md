@@ -19,14 +19,16 @@ make
 ```
 inside directory `kernel`
 
-With the `xdp-loader` from `xdp-tools`:
+The load_xdp.sh script (depends on xdp-loader from xdp-tools) will load and set up the xdp program
+
+Usage:
 ```sh
-sudo xdp-loader load <interface_name> xdp_filter.o --pin-path /sys/fs/bpf/xdp/xsk_filter/<interface_name>
+./load_xdp <interface>
 ```
 
 Example:
 ```sh
-sudo xdp-loader load enp0s3 xdp_filter.o --pin-path /sys/fs/bpf/xdp/xsk_filter/enp0s3
+./load_xdp enp0s3
 ```
 
 ## User

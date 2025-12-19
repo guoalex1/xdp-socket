@@ -8,9 +8,9 @@ Clone https://github.com/xdp-project/xdp-tools and run make install
 Kernel:
 To build the XDP filter, run make inside directory 'kernel'
 
-With the xdp-loader from xdp-tools:
-sudo xdp-loader load <interface_name> xdp_filter.o --pin-path /sys/fs/bpf/xdp/xsk_filter/<interface_name>
-Example: sudo xdp-loader load enp0s3 xdp_filter.o --pin-path /sys/fs/bpf/xdp/xsk_filter/enp0s3
+The load_xdp.sh script (depends on xdp-loader from xdp-tools) will load and set up the xdp program
+Usage: ./load_xdp <interface>
+Example: ./load_xdp enp0s3
 
 User:
 Run make inside the directory 'user' and the static library libxdp.a will be built in the same directory
