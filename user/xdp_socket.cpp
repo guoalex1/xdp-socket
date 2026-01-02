@@ -102,6 +102,7 @@ static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, uint32_t
     udph->source = (sport == 0) ? dport : sport;
     udph->dest = dport;
     udph->len = htons(sizeof(struct udphdr) + len);
+    udph->check = 0;
 
     iph->version = 4;
     iph->ihl = 5;
@@ -110,6 +111,7 @@ static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, uint32_t
     iph->ttl = 64;
     iph->daddr = daddr;
     iph->saddr = saddr;
+    iph->check = 0;
     iph->check = checksum_fold(iph, sizeof(*iph), 0);
 
     uint32_t sum = (iph->saddr >> 16) & 0xFFFF;
