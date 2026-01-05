@@ -23,10 +23,10 @@ template <typename T> void map_init(uint_map<T>* map)
     memset(map->buckets, 0, sizeof(map->buckets));
 }
 
-template <typename T> bool map_insert_or_assign(uint_map<T>* map, uint32_t key, T* value)
+template <typename T> T* map_insert_or_assign(uint_map<T>* map, uint32_t key, T* value)
 {
     if (value == NULL) {
-        return false;
+        return NULL;
     }
 
     size_t index = key % MAP_ENTRIES;
@@ -34,23 +34,23 @@ template <typename T> bool map_insert_or_assign(uint_map<T>* map, uint32_t key, 
     uint_map_entry<T>* current = map->buckets[index];
     while (current != NULL) {
         if (current->key == key) {
-            memcpy(&current->value, value, sizeof(T));
-            return true;
+            memcpy(&(current->value), value, sizeof(T));
+            return &(current->value);
         }
         current = current->next;
     }
 
     uint_map_entry<T>* node = (uint_map_entry<T>*)malloc(sizeof(uint_map_entry<T>));
     if (node == NULL) {
-        return false;
+        return NULL;
     }
 
     node->key = key;
-    memcpy(&node->value, value, sizeof(T));
+    memcpy(&(node->value), value, sizeof(T));
     node->next = map->buckets[index];
     map->buckets[index] = node;
 
-    return true;
+    return &(node->value);
 }
 
 template <typename T> T* map_find(uint_map<T>* map, uint32_t key)

@@ -61,9 +61,7 @@ struct interface_xdp_state* load_xdp_filter(const uint32_t ifindex)
 
     new_state.ref_count = 1;
 
-    map_insert_or_assign(&ifindex_to_xdp_state, ifindex, &new_state);
-
-    return map_find(&ifindex_to_xdp_state, ifindex);
+    return map_insert_or_assign(&ifindex_to_xdp_state, ifindex, &new_state);
 }
 
 void release_xdp_filter(const uint32_t ifindex)
