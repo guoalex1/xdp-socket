@@ -5,16 +5,8 @@ Setup dependencies for XDP: https://github.com/xdp-project/xdp-tutorial/blob/mai
 
 Clone https://github.com/xdp-project/xdp-tools and run make install
 
-Kernel:
-To build the XDP filter, run make inside directory 'kernel'
-
-The load_xdp.sh script (depends on xdp-loader from xdp-tools) will load and set up the xdp program
-Usage: ./load_xdp <interface>
-Example: ./load_xdp enp0s3
-
-User:
-Run make inside the directory 'user' and the static library libxdp.a will be built in the same directory
-Install the library and header to the system (/usr/local/lib and /usr/local/include/xdp-socket) with make install
+Build:
+Build and install the xdp and userspace programs in the root directory of this repository with 'make install'
 
 Examples:
 The directories server and client provide a minimal request-reply example using xdp-sockets

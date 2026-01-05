@@ -11,35 +11,8 @@ xdp-socket is a performant socket interface that uses XDP and XSK for UDP packet
   sudo make install
   ```
 
-## Kernel
-
-To build the XDP filter, run:
-```sh
-make
-```
-inside directory `kernel`
-
-The load_xdp.sh script (depends on xdp-loader from xdp-tools) will load and set up the xdp program
-
-Usage:
-```sh
-./load_xdp <interface>
-```
-
-Example:
-```sh
-./load_xdp enp0s3
-```
-
-## User
-
-Run:
-```sh
-make
-```
-inside the directory `user` and the static library `libxdp.a` will be built in the same directory
-
-Install the library and header to the system (/usr/local/lib and /usr/local/include/xdp-socket) with:
+## Build
+Build and install the xdp and userspace programs in the root directory of this repository with:
 ```sh
 make install
 ```
