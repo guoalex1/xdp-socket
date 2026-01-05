@@ -80,7 +80,7 @@ static int arp_exchange(int fd, const char src_mac[ETH_ALEN], uint32_t src_ip, u
     }
 }
 
-int get_mac(const char* ifname, const uint32_t src_ip, const char src_mac[ETH_ALEN], const uint32_t dst_ip, char dst_mac[ETH_ALEN])
+int get_mac(const uint32_t ifindex, const uint32_t src_ip, const char src_mac[ETH_ALEN], const uint32_t dst_ip, char dst_mac[ETH_ALEN])
 {
     char (*mac)[ETH_ALEN] = map_find(&arp_table, dst_ip);
 
@@ -90,11 +90,6 @@ int get_mac(const char* ifname, const uint32_t src_ip, const char src_mac[ETH_AL
     }
 
     int sockfd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
-
-    struct ifreq ifr;
-    strncpy(ifr.ifr_name, ifname, IFNAMSIZ);
-    ioctl(sockfd, SIOCGIFINDEX, &ifr);
-    int ifindex = ifr.ifr_ifindex;
 
     struct sockaddr_ll sll;
     sll.sll_family = AF_PACKET;

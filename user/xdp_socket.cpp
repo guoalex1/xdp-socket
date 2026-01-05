@@ -32,7 +32,6 @@ struct xsk_queue {
     void* buffer;
     int fd;
     uint32_t queue = 0;
-    char ifname[IF_NAMESIZE];
     uint32_t ifindex;
     interface_xdp_state* xdp_state;
     char smac[ETH_ALEN];
@@ -166,11 +165,12 @@ int xdp_socket(int socket_family, int socket_type, int protocol, const struct xd
     struct ifaddrs* ifaddr;
     SYSCALL(getifaddrs(&ifaddr));
 
+    char ifname[IF_NAMESIZE];
     bool ifname_found = false;
     // Get ifname from ip
     for (struct ifaddrs* ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
         if (ifa->ifa_addr != NULL && ifa->ifa_addr->sa_family == AF_INET && xsk.saddr == ((struct sockaddr_in*)ifa->ifa_addr)->sin_addr.s_addr) {
-            strncpy(xsk.ifname, ifa->ifa_name, IF_NAMESIZE);
+            strncpy(ifname, ifa->ifa_name, IF_NAMESIZE);
             ifname_found = true;
             break;
         }
@@ -183,24 +183,23 @@ int xdp_socket(int socket_family, int socket_type, int protocol, const struct xd
 
     // Use ifname to find mac address
     for (struct ifaddrs* ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
-        if (!strcmp(ifa->ifa_name, xsk.ifname) && ifa->ifa_addr != NULL && ifa->ifa_addr->sa_family == AF_PACKET) {
+        if (!strcmp(ifa->ifa_name, ifname) && ifa->ifa_addr != NULL && ifa->ifa_addr->sa_family == AF_PACKET) {
             struct sockaddr_ll* lladdr = (struct sockaddr_ll*)ifa->ifa_addr;
             assert(lladdr->sll_halen == ETH_ALEN);
             memcpy(xsk.smac, lladdr->sll_addr, ETH_ALEN);
+            xsk.ifindex = lladdr->sll_ifindex;
             break;
         }
     }
 
     freeifaddrs(ifaddr);
 
-    xsk.ifindex = if_nametoindex(xsk.ifname);
-
     const struct xsk_socket_config scfg = { .rx_size = config->queue_length,
                                             .tx_size = config->queue_length,
                                             .libbpf_flags = XSK_LIBXDP_FLAGS__INHIBIT_PROG_LOAD, // don't load default xdp program
                                             .xdp_flags = config->xdp_flags,
                                             .bind_flags = XDP_USE_NEED_WAKEUP };
-    SYSCALL(xsk_socket__create(&xsk.socket, xsk.ifname, config->queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
+    SYSCALL(xsk_socket__create(&xsk.socket, ifname, config->queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
     xsk.fd = xsk_socket__fd(xsk.socket);
 
     uint32_t idx;
@@ -223,7 +222,7 @@ int xdp_socket(int socket_family, int socket_type, int protocol, const struct xd
 
     xsk.xdp_state = load_xdp_filter(xsk.ifindex);
     if (xsk.xdp_state == NULL) {
-        fprintf(stderr, "Failed to load XDP filter for %s\n", xsk.ifname);
+        fprintf(stderr, "Failed to load XDP filter for %s\n", ifname);
         return -1;
     }
 
@@ -296,7 +295,7 @@ ssize_t xdp_sendto(int sockfd, const void* buf, size_t size, int flags, const st
     uint16_t dport = (dest_addr == nullptr) ? xsk->dport : ((sockaddr_in*)dest_addr)->sin_port;
 
     char dmac[ETH_ALEN] = {0};
-    if (get_mac(xsk->ifname, xsk->saddr, xsk->smac, daddr, dmac) != 0) {
+    if (get_mac(xsk->ifindex, xsk->saddr, xsk->smac, daddr, dmac) != 0) {
         return -1;
     }
 
