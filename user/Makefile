@@ -2,7 +2,7 @@ CXX = g++
 CXXFLAGS = -O3 -Wall
 
 LIBNAME = libxdp_socket.a
-SRC = xdp_socket.cpp arp.cpp
+SRC = xdp_socket.cpp arp.cpp xdp_loader.cpp
 OBJS = $(SRC:.cpp=.o)
 
 all: $(LIBNAME)

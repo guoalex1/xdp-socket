@@ -38,7 +38,7 @@ int main(int argc, char** argv)
     }
 
     if (!iface_ip || port == 0) {
-        fprintf(stderr, "Msissing required parameters\n");
+        fprintf(stderr, "Missing required parameters\n");
         print_usage(argv[0]);
         return -1;
     }

@@ -17,6 +17,7 @@
 #include "xdp_socket.h"
 #include "arp.h"
 #include "uint_map.h"
+#include "xdp_loader.h"
 
 #define TESTING_ENABLE_ASSERTIONS 1
 #include "syscall_macro.h"
@@ -32,6 +33,8 @@ struct xsk_queue {
     int fd;
     uint32_t queue = 0;
     char ifname[IF_NAMESIZE];
+    uint32_t ifindex;
+    interface_xdp_state* xdp_state;
     char smac[ETH_ALEN];
     uint32_t saddr = 0;
     uint16_t sport = 0;
@@ -190,6 +193,8 @@ int xdp_socket(int socket_family, int socket_type, int protocol, const struct xd
 
     freeifaddrs(ifaddr);
 
+    xsk.ifindex = if_nametoindex(xsk.ifname);
+
     const struct xsk_socket_config scfg = { .rx_size = config->queue_length,
                                             .tx_size = config->queue_length,
                                             .libbpf_flags = XSK_LIBXDP_FLAGS__INHIBIT_PROG_LOAD, // don't load default xdp program
@@ -216,6 +221,12 @@ int xdp_socket(int socket_family, int socket_type, int protocol, const struct xd
     xsk.queue_length = config->queue_length;
     xsk.buffer_size = buffer_size;
 
+    xsk.xdp_state = load_xdp_filter(xsk.ifindex);
+    if (xsk.xdp_state == NULL) {
+        fprintf(stderr, "Failed to load XDP filter for %s\n", xsk.ifname);
+        return -1;
+    }
+
     map_insert_or_assign(&fd_to_xsk, xsk.fd, &xsk);
     return xsk.fd;
 }
@@ -240,34 +251,13 @@ int xdp_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen)
         return -1;
     }
 
-    char bpf_map_path[64];
-    snprintf(bpf_map_path, sizeof(bpf_map_path), "/sys/fs/bpf/xdp/xsk_filter/%s/xsk_map", xsk->ifname);
-
-    // xsk_map
-    int xsk_map_fd = bpf_obj_get(bpf_map_path);
-    int sock_fd = xsk_socket__fd(xsk->socket);
-    int ret = bpf_map_update_elem(xsk_map_fd, &xsk->queue, &sock_fd, BPF_ANY);
-    close(xsk_map_fd);
-
-    if (ret < 0) {
+    if (bpf_map_update_elem(xsk->xdp_state->xsk_map_fd, &xsk->queue, &xsk->fd, BPF_ANY) < 0) {
         fprintf(stderr, "Failed to update xsk map\n");
         return -1;
     }
 
-    snprintf(bpf_map_path, sizeof(bpf_map_path), "/sys/fs/bpf/xdp/xsk_filter/%s/bind_addr_map", xsk->ifname);
-
-    // bind_addr_map
-    int bind_addr_fd = bpf_obj_get(bpf_map_path);
-    if (bind_addr_fd < 0) {
-        fprintf(stderr, "Error getting bind_addr_map: verify xdp program is loaded correctly\n");
-        return -1;
-    }
-
     uint8_t value = 1;
-    ret = bpf_map_update_elem(bind_addr_fd, &bind_addr, &value, BPF_ANY);
-    close(bind_addr_fd);
-
-    if (ret < 0) {
+    if (bpf_map_update_elem(xsk->xdp_state->bind_map_fd, &bind_addr, &value, BPF_ANY) < 0) {
         fprintf(stderr, "Failed to update bind map\n");
         return -1;
     }
@@ -402,26 +392,14 @@ int xdp_close(int fd)
         return close(fd);
     }
 
-    char bpf_map_path[64];
-    snprintf(bpf_map_path, sizeof(bpf_map_path), "/sys/fs/bpf/xdp/xsk_filter/%s/bind_addr_map", xsk->ifname);
+    struct filter_bind_addr key = {0};
+    key.ip = xsk->bind_ip;
+    key.port = xsk->sport;
+    bpf_map_delete_elem(xsk->xdp_state->bind_map_fd, &key);
 
-    int bind_addr_fd = bpf_obj_get(bpf_map_path);
-    if (bind_addr_fd >= 0) {
-        struct filter_bind_addr key = {0};
-        key.ip = xsk->bind_ip;
-        key.port = xsk->sport;
+    bpf_map_delete_elem(xsk->xdp_state->xsk_map_fd, &xsk->queue);
 
-        bpf_map_delete_elem(bind_addr_fd, &key);
-        close(bind_addr_fd);
-    }
-
-    snprintf(bpf_map_path, sizeof(bpf_map_path), "/sys/fs/bpf/xdp/xsk_filter/%s/xsk_map", xsk->ifname);
-
-    int xsk_map_fd = bpf_obj_get(bpf_map_path);
-    if (xsk_map_fd >= 0) {
-        bpf_map_delete_elem(xsk_map_fd, &xsk->queue);
-        close(xsk_map_fd);
-    }
+    release_xdp_filter(xsk->ifindex);
 
     if (xsk->socket != NULL) {
         xsk_socket__delete(xsk->socket);
