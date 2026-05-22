@@ -202,7 +202,7 @@ int xdp_socket(int socket_family, int socket_type, int protocol, const struct xd
     SYSCALL(xsk_socket__create(&xsk.socket, ifname, config->queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
     xsk.fd = xsk_socket__fd(xsk.socket);
 
-    uint32_t idx;
+    uint32_t idx = 0;
     uint32_t cnt = xsk_ring_prod__reserve(&xsk.fill, config->queue_length, &idx);
     if (idx != 0 || cnt != config->queue_length) {
         fprintf(stderr, "Error: RX fill ring failed: %u %u\n", cnt, idx);
