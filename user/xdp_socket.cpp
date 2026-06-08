@@ -7,6 +7,7 @@
 #include <netinet/udp.h>     // struct udphdr
 #include <poll.h>            // poll
 #include <sys/mman.h>        // mmap
+#include <sys/uio.h>         // struct iovec
 #include <assert.h>
 #include <unistd.h>
 #include <xdp/xsk.h>
@@ -88,14 +89,18 @@ static void release_tx(xsk_queue* xsk)
 }
 
 // Returns size
-static uint32_t setup_ipv4_pkt(void* data, const void* buf, size_t len, uint32_t daddr, uint16_t dport, const char* smac, const char* dmac, uint32_t saddr, uint16_t sport)
+static uint32_t setup_ipv4_pkt(void* data, const struct iovec* iov, size_t iovcnt, size_t len, uint32_t daddr, uint16_t dport, const char* smac, const char* dmac, uint32_t saddr, uint16_t sport)
 {
     struct ethhdr* eth = (struct ethhdr*)data;
     struct iphdr* iph = (struct iphdr*)(eth + 1);
     struct udphdr* udph = (struct udphdr*)(iph + 1);
     char* payload = (char*)(udph + 1);
 
-    memcpy(payload, buf, len);
+    size_t offset = 0;
+    for (size_t i = 0; i < iovcnt; i++) {
+        memcpy(payload + offset, iov[i].iov_base, iov[i].iov_len);
+        offset += iov[i].iov_len;
+    }
 
     memcpy(eth->h_source, smac, ETH_ALEN);
     memcpy(eth->h_dest, dmac, ETH_ALEN);
@@ -278,12 +283,17 @@ int xdp_connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen)
     return 0;
 }
 
-ssize_t xdp_sendto(int sockfd, const void* buf, size_t size, int flags, const struct sockaddr* dest_addr, socklen_t addrlen)
+ssize_t xdp_sendmsg(int sockfd, const struct msghdr* msg, int flags)
 {
     xsk_queue* xsk = map_find(&fd_to_xsk, sockfd);
 
     if (xsk == NULL) {
-        return sendto(sockfd, buf, size, flags, dest_addr, addrlen);
+        return sendmsg(sockfd, msg, flags);
+    }
+
+    size_t size = 0;
+    for (size_t i = 0; i < msg->msg_iovlen; i++) {
+        size += msg->msg_iov[i].iov_len;
     }
 
     if (sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr) + size > XSK_UMEM__DEFAULT_FRAME_SIZE) {
@@ -291,8 +301,9 @@ ssize_t xdp_sendto(int sockfd, const void* buf, size_t size, int flags, const st
         return -1;
     }
 
-    uint32_t daddr = (dest_addr == nullptr) ? xsk->daddr : ((sockaddr_in*)dest_addr)->sin_addr.s_addr;
-    uint16_t dport = (dest_addr == nullptr) ? xsk->dport : ((sockaddr_in*)dest_addr)->sin_port;
+    struct sockaddr_in* dest_addr = (struct sockaddr_in*)msg->msg_name;
+    uint32_t daddr = (dest_addr == nullptr) ? xsk->daddr : dest_addr->sin_addr.s_addr;
+    uint16_t dport = (dest_addr == nullptr) ? xsk->dport : dest_addr->sin_port;
 
     char dmac[ETH_ALEN] = {0};
     if (get_mac(xsk->ifindex, xsk->saddr, xsk->smac, daddr, dmac) != 0) {
@@ -306,7 +317,8 @@ ssize_t xdp_sendto(int sockfd, const void* buf, size_t size, int flags, const st
 
     void* data = xsk_umem__get_data(xsk->buffer, frame_offset);
 
-    const uint32_t frame_size = setup_ipv4_pkt(data, buf, size, daddr, dport, xsk->smac, dmac, xsk->saddr, xsk->sport);
+    // TODO: msg_control
+    const uint32_t frame_size = setup_ipv4_pkt(data, msg->msg_iov, msg->msg_iovlen, size, daddr, dport, xsk->smac, dmac, xsk->saddr, xsk->sport);
 
     uint32_t idx;
     if (xsk_ring_prod__reserve(&xsk->tx, 1, &idx) == 1) {
@@ -321,17 +333,28 @@ ssize_t xdp_sendto(int sockfd, const void* buf, size_t size, int flags, const st
     return -1;
 }
 
+ssize_t xdp_sendto(int sockfd, const void* buf, size_t size, int flags, const struct sockaddr* dest_addr, socklen_t addrlen)
+{
+    struct iovec iov = { (void*)buf, size };
+    struct msghdr msg = {};
+    msg.msg_name = (void*)dest_addr;
+    msg.msg_namelen = addrlen;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    return xdp_sendmsg(sockfd, &msg, flags);
+}
+
 ssize_t xdp_send(int sockfd, const void* buf, size_t size, int flags)
 {
     return xdp_sendto(sockfd, buf, size, flags, nullptr, 0);
 }
 
-ssize_t xdp_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockaddr* src_addr, socklen_t* addrlen)
+ssize_t xdp_recvmsg(int sockfd, struct msghdr* msg, int flags)
 {
     xsk_queue* xsk = map_find(&fd_to_xsk, sockfd);
 
     if (xsk == NULL) {
-        return recvfrom(sockfd, buf, size, flags, src_addr, addrlen);
+        return recvmsg(sockfd, msg, flags);
     }
 
     if (!((flags & MSG_DONTWAIT) || (xsk->status_flags & O_NONBLOCK))) {
@@ -356,26 +379,57 @@ ssize_t xdp_recvfrom(int sockfd, void* buf, size_t size, int flags, struct socka
     struct ethhdr* eth = (struct ethhdr*)data;
     struct iphdr* iph = (struct iphdr*)(eth + 1);
     struct udphdr* udph = (struct udphdr*)(iph + 1);
-    void* payload = (void*)(udph + 1);
+    char* payload = (char*)(udph + 1);
     size_t payload_size = ntohs(udph->len) - sizeof(struct udphdr);
 
-    int copy_size = size < payload_size ? size : payload_size;
-    memcpy(buf, payload, copy_size);
+    size_t copied = 0;
+    for (size_t i = 0; i < msg->msg_iovlen && copied < payload_size; ++i) {
+        size_t remaining = payload_size - copied;
+        size_t size = msg->msg_iov[i].iov_len < remaining ? msg->msg_iov[i].iov_len : remaining;
+        memcpy(msg->msg_iov[i].iov_base, payload + copied, size);
+        copied += size;
+    }
 
-    if (src_addr != nullptr && addrlen != nullptr && *addrlen >= sizeof(struct sockaddr_in)) {
-        struct sockaddr_in* sin = (struct sockaddr_in*)src_addr;
+    msg->msg_flags = 0;
+    if (copied < payload_size) {
+        msg->msg_flags |= MSG_TRUNC;
+    }
+
+    if (msg->msg_name != nullptr && msg->msg_namelen >= sizeof(struct sockaddr_in)) {
+        struct sockaddr_in* sin = (struct sockaddr_in*)msg->msg_name;
         sin->sin_family = AF_INET;
         sin->sin_addr.s_addr = iph->saddr;
         sin->sin_port = udph->source;
-        *addrlen = sizeof(struct sockaddr_in);
+        msg->msg_namelen = sizeof(struct sockaddr_in);
     }
+
+    // TODO: msg_control
+    msg->msg_controllen = 0;
 
     if (xsk_ring_prod__reserve(&xsk->fill, 1, &idx) == 1) {
         *xsk_ring_prod__fill_addr(&xsk->fill, idx) = addr;
         xsk_ring_prod__submit(&xsk->fill, 1);
     }
 
-    return copy_size;
+    return copied;
+}
+
+ssize_t xdp_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockaddr* src_addr, socklen_t* addrlen)
+{
+    struct iovec iov = { buf, size };
+    struct msghdr msg = {};
+    msg.msg_name = src_addr;
+    msg.msg_namelen = (addrlen != nullptr) ? *addrlen : 0;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+
+    ssize_t ret = xdp_recvmsg(sockfd, &msg, flags);
+
+    if (ret >= 0 && src_addr != nullptr && addrlen != nullptr) {
+        *addrlen = msg.msg_namelen;
+    }
+
+    return ret;
 }
 
 ssize_t xdp_recv(int sockfd, void* buf, size_t size, int flags)
