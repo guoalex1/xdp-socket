@@ -291,6 +291,11 @@ ssize_t xdp_sendmsg(int sockfd, const struct msghdr* msg, int flags)
         return sendmsg(sockfd, msg, flags);
     }
 
+    if (msg == nullptr) {
+        errno = EFAULT;
+        return -1;
+    }
+
     size_t size = 0;
     for (size_t i = 0; i < msg->msg_iovlen; i++) {
         size += msg->msg_iov[i].iov_len;
@@ -301,7 +306,9 @@ ssize_t xdp_sendmsg(int sockfd, const struct msghdr* msg, int flags)
         return -1;
     }
 
-    struct sockaddr_in* dest_addr = (struct sockaddr_in*)msg->msg_name;
+    struct sockaddr_in* dest_addr = (msg->msg_name != nullptr && msg->msg_namelen >= sizeof(struct sockaddr_in))
+                                    ? (struct sockaddr_in*)msg->msg_name
+                                    : nullptr;
     uint32_t daddr = (dest_addr == nullptr) ? xsk->daddr : dest_addr->sin_addr.s_addr;
     uint16_t dport = (dest_addr == nullptr) ? xsk->dport : dest_addr->sin_port;
 
@@ -357,6 +364,11 @@ ssize_t xdp_recvmsg(int sockfd, struct msghdr* msg, int flags)
         return recvmsg(sockfd, msg, flags);
     }
 
+    if (msg == nullptr) {
+        errno = EFAULT;
+        return -1;
+    }
+
     if (!((flags & MSG_DONTWAIT) || (xsk->status_flags & O_NONBLOCK))) {
         struct pollfd fds = { xsk->fd, POLLIN };
         SYSCALLIO(poll(&fds, 1, -1));
@@ -395,11 +407,14 @@ ssize_t xdp_recvmsg(int sockfd, struct msghdr* msg, int flags)
         msg->msg_flags |= MSG_TRUNC;
     }
 
-    if (msg->msg_name != nullptr && msg->msg_namelen >= sizeof(struct sockaddr_in)) {
-        struct sockaddr_in* sin = (struct sockaddr_in*)msg->msg_name;
-        sin->sin_family = AF_INET;
-        sin->sin_addr.s_addr = iph->saddr;
-        sin->sin_port = udph->source;
+    if (msg->msg_name != nullptr && msg->msg_namelen > 0) {
+        struct sockaddr_in sin = {};
+        sin.sin_family = AF_INET;
+        sin.sin_addr.s_addr = iph->saddr;
+        sin.sin_port = udph->source;
+
+        size_t copy_len = (msg->msg_namelen < sizeof(struct sockaddr_in)) ? msg->msg_namelen : sizeof(struct sockaddr_in);
+        memcpy(msg->msg_name, &sin, copy_len);
         msg->msg_namelen = sizeof(struct sockaddr_in);
     }
 
