@@ -44,6 +44,7 @@ struct xsk_queue {
     int status_flags = 0;
     int queue_length = 16;
     int buffer_size = 0;
+    uint32_t next_frame = 0;
 };
 
 static uint_map<xsk_queue> fd_to_xsk = {};
@@ -318,9 +319,8 @@ ssize_t xdp_sendmsg(int sockfd, const struct msghdr* msg, int flags)
     }
 
     release_tx(xsk);
-    static uint32_t next_frame = 0;
-    const uint64_t frame_offset = next_frame * XSK_UMEM__DEFAULT_FRAME_SIZE;
-    next_frame = (next_frame + 1) % xsk->queue_length;
+    const uint64_t frame_offset = xsk->next_frame * XSK_UMEM__DEFAULT_FRAME_SIZE;
+    xsk->next_frame = (xsk->next_frame + 1) % xsk->queue_length;
 
     void* data = xsk_umem__get_data(xsk->buffer, frame_offset);
 
