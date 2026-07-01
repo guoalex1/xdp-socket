@@ -26,11 +26,15 @@ int xdp_connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen);
 
 ssize_t xdp_sendmsg(int sockfd, const struct msghdr* msg, int flags);
 
+int xdp_sendmmsg(int sockfd, struct mmsghdr* msgvec, unsigned int vlen, int flags);
+
 ssize_t xdp_sendto(int sockfd, const void* buf, size_t size, int flags, const struct sockaddr* dest_addr, socklen_t addrlen);
 
 ssize_t xdp_send(int sockfd, const void* buf, size_t size, int flags);
 
 ssize_t xdp_recvmsg(int sockfd, struct msghdr* msg, int flags);
+
+int xdp_recvmmsg(int sockfd, struct mmsghdr* msgvec, unsigned int vlen, int flags, struct timespec* timeout);
 
 ssize_t xdp_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockaddr* src_addr, socklen_t* addrlen);
 

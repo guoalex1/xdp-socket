@@ -340,6 +340,30 @@ ssize_t xdp_sendmsg(int sockfd, const struct msghdr* msg, int flags)
     return -1;
 }
 
+int xdp_sendmmsg(int sockfd, struct mmsghdr* msgvec, unsigned int vlen, int flags)
+{
+    if (map_find(&fd_to_xsk, sockfd) == NULL) {
+        return sendmmsg(sockfd, msgvec, vlen, flags);
+    }
+
+    if (msgvec == nullptr) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    uint32_t sent = 0;
+    for (; sent < vlen; sent++) {
+        ssize_t ret = xdp_sendmsg(sockfd, &msgvec[sent].msg_hdr, flags);
+        if (ret < 0) {
+            break;
+        }
+
+        msgvec[sent].msg_len = ret;
+    }
+
+    return (sent == 0 && vlen > 0) ? -1 : sent;
+}
+
 ssize_t xdp_sendto(int sockfd, const void* buf, size_t size, int flags, const struct sockaddr* dest_addr, socklen_t addrlen)
 {
     struct iovec iov = { (void*)buf, size };
@@ -427,6 +451,35 @@ ssize_t xdp_recvmsg(int sockfd, struct msghdr* msg, int flags)
     }
 
     return copied;
+}
+
+int xdp_recvmmsg(int sockfd, struct mmsghdr* msgvec, unsigned int vlen, int flags, struct timespec* timeout)
+{
+    if (map_find(&fd_to_xsk, sockfd) == NULL) {
+        return recvmmsg(sockfd, msgvec, vlen, flags, timeout);
+    }
+
+    if (msgvec == nullptr) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    // TODO: timeout
+    uint32_t received = 0;
+    for (; received < vlen; received++) {
+        ssize_t ret = xdp_recvmsg(sockfd, &msgvec[received].msg_hdr, flags);
+        if (ret < 0) {
+            break;
+        }
+
+        msgvec[received].msg_len = ret;
+
+        if (flags & MSG_WAITFORONE) {
+            flags |= MSG_DONTWAIT;
+        }
+    }
+
+    return (received == 0 && vlen > 0) ? -1 : received;
 }
 
 ssize_t xdp_recvfrom(int sockfd, void* buf, size_t size, int flags, struct sockaddr* src_addr, socklen_t* addrlen)
