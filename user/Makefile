@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -O3 -Wall
+CXXFLAGS = -O3 -Wall -fPIC -fno-strict-aliasing
 
 LIBNAME = libxdp_socket.a
 SRC = xdp_socket.cpp arp.cpp xdp_loader.cpp
