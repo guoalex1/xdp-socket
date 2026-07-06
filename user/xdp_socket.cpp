@@ -333,7 +333,9 @@ ssize_t xdp_sendmsg(int sockfd, const struct msghdr* msg, int flags)
         tx_desc->addr = frame_offset;
         tx_desc->len = frame_size;
         xsk_ring_prod__submit(&xsk->tx, 1);
-        SYSCALLIO(sendto(xsk->fd, nullptr, 0, MSG_DONTWAIT, nullptr, 0));
+        if (xsk_ring_prod__needs_wakeup(&xsk->tx)) {
+            sendto(xsk->fd, nullptr, 0, MSG_DONTWAIT, nullptr, 0);
+        }
         return size;
     }
 
@@ -395,7 +397,7 @@ ssize_t xdp_recvmsg(int sockfd, struct msghdr* msg, int flags)
 
     if (!((flags & MSG_DONTWAIT) || (xsk->status_flags & O_NONBLOCK))) {
         struct pollfd fds = { xsk->fd, POLLIN };
-        SYSCALLIO(poll(&fds, 1, -1));
+        poll(&fds, 1, -1);
     }
 
     uint32_t idx;
