@@ -15,7 +15,8 @@ all: $(OBJ)
 	$(BPF_CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 install: $(OBJ)
-	install -m 644 $(OBJ) $(INSTALL_DIR)
+	install -d $(INSTALL_DIR)
+	install -m 644 $(OBJ) $(INSTALL_DIR)/
 
 uninstall:
 	rm -f $(INSTALL_DIR)/$(OBJ)
