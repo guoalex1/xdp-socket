@@ -5,6 +5,7 @@
 #include <netinet/if_ether.h>// struct ethhdr
 #include <netinet/ip.h>      // struct iphdr
 #include <netinet/udp.h>     // struct udphdr
+#include <linux/if_xdp.h>    // XDP_OPTIONS
 #include <poll.h>            // poll
 #include <sys/mman.h>        // mmap
 #include <sys/uio.h>         // struct iovec
@@ -207,6 +208,13 @@ int xdp_socket(int socket_family, int socket_type, int protocol, const struct xd
                                             .bind_flags = XDP_USE_NEED_WAKEUP };
     SYSCALL(xsk_socket__create(&xsk.socket, ifname, config->queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
     xsk.fd = xsk_socket__fd(xsk.socket);
+
+    struct xdp_options xdp_opts = {};
+    socklen_t xdp_opts_len = sizeof(xdp_opts);
+    if (getsockopt(xsk.fd, SOL_XDP, XDP_OPTIONS, &xdp_opts, &xdp_opts_len) == 0) {
+        fprintf(stderr, "xdp_socket: %s queue %u bound in %s mode\n", ifname, config->queue,
+                (xdp_opts.flags & XDP_OPTIONS_ZEROCOPY) ? "zerocopy" : "copy");
+    }
 
     uint32_t idx = 0;
     uint32_t cnt = xsk_ring_prod__reserve(&xsk.fill, config->queue_length, &idx);
