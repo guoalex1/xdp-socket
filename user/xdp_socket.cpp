@@ -216,6 +216,13 @@ int xdp_socket(int socket_family, int socket_type, int protocol, const struct xd
                 (xdp_opts.flags & XDP_OPTIONS_ZEROCOPY) ? "zerocopy" : "copy");
     }
 
+    int prefer_busy_poll = 1;
+    int busy_poll_usecs = 100;
+    int busy_poll_budget = 64;
+    SYSCALL(setsockopt(xsk.fd, SOL_SOCKET, SO_PREFER_BUSY_POLL, &prefer_busy_poll, sizeof(prefer_busy_poll)));
+    SYSCALL(setsockopt(xsk.fd, SOL_SOCKET, SO_BUSY_POLL, &busy_poll_usecs, sizeof(busy_poll_usecs)));
+    SYSCALL(setsockopt(xsk.fd, SOL_SOCKET, SO_BUSY_POLL_BUDGET, &busy_poll_budget, sizeof(busy_poll_budget)));
+
     uint32_t idx = 0;
     uint32_t cnt = xsk_ring_prod__reserve(&xsk.fill, config->queue_length, &idx);
     if (idx != 0 || cnt != config->queue_length) {
