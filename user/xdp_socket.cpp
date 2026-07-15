@@ -5,7 +5,6 @@
 #include <netinet/if_ether.h>// struct ethhdr
 #include <netinet/ip.h>      // struct iphdr
 #include <netinet/udp.h>     // struct udphdr
-#include <linux/if_xdp.h>    // XDP_OPTIONS
 #include <poll.h>            // poll
 #include <sys/mman.h>        // mmap
 #include <sys/uio.h>         // struct iovec
@@ -208,20 +207,6 @@ int xdp_socket(int socket_family, int socket_type, int protocol, const struct xd
                                             .bind_flags = XDP_USE_NEED_WAKEUP };
     SYSCALL(xsk_socket__create(&xsk.socket, ifname, config->queue, xsk.umem, &xsk.rx, &xsk.tx, &scfg));
     xsk.fd = xsk_socket__fd(xsk.socket);
-
-    struct xdp_options xdp_opts = {};
-    socklen_t xdp_opts_len = sizeof(xdp_opts);
-    if (getsockopt(xsk.fd, SOL_XDP, XDP_OPTIONS, &xdp_opts, &xdp_opts_len) == 0) {
-        fprintf(stderr, "xdp_socket: %s queue %u bound in %s mode\n", ifname, config->queue,
-                (xdp_opts.flags & XDP_OPTIONS_ZEROCOPY) ? "zerocopy" : "copy");
-    }
-
-    int prefer_busy_poll = 1;
-    int busy_poll_usecs = 100;
-    int busy_poll_budget = 64;
-    SYSCALL(setsockopt(xsk.fd, SOL_SOCKET, SO_PREFER_BUSY_POLL, &prefer_busy_poll, sizeof(prefer_busy_poll)));
-    SYSCALL(setsockopt(xsk.fd, SOL_SOCKET, SO_BUSY_POLL, &busy_poll_usecs, sizeof(busy_poll_usecs)));
-    SYSCALL(setsockopt(xsk.fd, SOL_SOCKET, SO_BUSY_POLL_BUDGET, &busy_poll_budget, sizeof(busy_poll_budget)));
 
     uint32_t idx = 0;
     uint32_t cnt = xsk_ring_prod__reserve(&xsk.fill, config->queue_length, &idx);
